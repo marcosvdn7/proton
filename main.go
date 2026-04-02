@@ -7,16 +7,32 @@ import (
 	"proton/cmd/mail"
 	"proton/cmd/signin"
 	"proton/cmd/signup"
+	"proton/internal/log"
 )
 
 func main() {
-	if len(os.Args) < 2 {
+	// Parse --verbose flag and remove it from args
+	verbose := false
+	args := os.Args[1:]
+	var filteredArgs []string
+	for _, arg := range args {
+		if arg == "--verbose" || arg == "-v" {
+			verbose = true
+		} else {
+			filteredArgs = append(filteredArgs, arg)
+		}
+	}
+
+	// Initialize logger with verbose setting
+	log.Init(verbose)
+
+	if len(filteredArgs) < 1 {
 		printUsage()
 		os.Exit(1)
 	}
 
-	command := os.Args[1]
-	args := os.Args[2:]
+	command := filteredArgs[0]
+	args = filteredArgs[1:]
 
 	switch command {
 	case "signup":

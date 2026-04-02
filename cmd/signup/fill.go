@@ -10,6 +10,25 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultConfigPath is the default path for the account configuration file
+var DefaultConfigPath = "account.yaml"
+
+// Clipboard interface for copying text to clipboard
+type Clipboard interface {
+	Copy(text string) error
+}
+
+// PbCopyClipboard implements Clipboard using macOS pbcopy command
+type PbCopyClipboard struct{}
+
+// Copy copies text to clipboard using pbcopy
+func (c *PbCopyClipboard) Copy(text string) error {
+	cmd := exec.Command("pbcopy")
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run()
+}
+
+// Config represents the account configuration
 type Config struct {
 	Plan     string `yaml:"plan"`
 	Username string `yaml:"username"`
@@ -20,15 +39,17 @@ type Config struct {
 	} `yaml:"recovery"`
 }
 
-type field struct {
-	label string
-	value string
+// Field represents a configuration field with label and value
+type Field struct {
+	Label string
+	Value string
 }
 
-func loadConfig() (*Config, error) {
-	data, err := os.ReadFile("account.yaml")
+// loadConfigFrom loads configuration from the specified path
+func loadConfigFrom(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("cannot read account.yaml: %w\n\nRun 'proton signup init' to create one")
+		return nil, fmt.Errorf("cannot read %s: %w\n\nRun 'proton signup init' to create one", path, err)
 	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
@@ -37,14 +58,21 @@ func loadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
+// loadConfig loads configuration from the default path
+func loadConfig() (*Config, error) {
+	return loadConfigFrom(DefaultConfigPath)
+}
+
+// Deprecated: use Clipboard interface instead
 func copyToClipboard(text string) error {
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = strings.NewReader(text)
 	return cmd.Run()
 }
 
-func (cfg *Config) fields() []field {
-	return []field{
+// Fields returns all configuration fields as a slice
+func (cfg *Config) Fields() []Field {
+	return []Field{
 		{"username", cfg.Username},
 		{"password", cfg.Password},
 		{"recovery_email", cfg.Recovery.RecoveryEmail},
@@ -52,43 +80,70 @@ func (cfg *Config) fields() []field {
 	}
 }
 
-func (cfg *Config) getField(name string) (string, bool) {
-	for _, f := range cfg.fields() {
-		if f.label == name {
-			return f.value, true
+// GetField returns the value of a field by name
+func (cfg *Config) GetField(name string) (string, bool) {
+	for _, f := range cfg.Fields() {
+		if f.Label == name {
+			return f.Value, true
 		}
 	}
 	return "", false
 }
 
+// fields returns all configuration fields as a slice (deprecated, use Fields)
+func (cfg *Config) fields() []Field {
+	return cfg.Fields()
+}
+
+// getField returns the value of a field by name (deprecated, use GetField)
+func (cfg *Config) getField(name string) (string, bool) {
+	return cfg.GetField(name)
+}
+
+// Fill handles field filling with clipboard functionality
 func Fill(fieldName string) {
-	cfg, err := loadConfig()
-	if err != nil {
+	clipboard := &PbCopyClipboard{}
+	if err := FillWithClipboard(fieldName, DefaultConfigPath, clipboard); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+// FillWithClipboard handles field filling with a configurable clipboard and config path
+func FillWithClipboard(fieldName, configPath string, clipboard Clipboard) error {
+	cfg, err := loadConfigFrom(configPath)
+	if err != nil {
+		return err
 	}
 
 	// Single field mode
 	if fieldName != "" {
-		value, ok := cfg.getField(fieldName)
-		if !ok {
-			fmt.Fprintf(os.Stderr, "❌ Unknown field: %s\n", fieldName)
-			fmt.Println("Available: username, password, recovery_email, recovery_phone")
-			os.Exit(1)
-		}
-		if value == "" {
-			fmt.Printf("⚠️  %s is empty in account.yaml\n", fieldName)
-			os.Exit(1)
-		}
-		if err := copyToClipboard(value); err != nil {
-			fmt.Fprintf(os.Stderr, "Error copying to clipboard: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("📋 %s → copied to clipboard\n", fieldName)
-		return
+		return fillSingleField(cfg, fieldName, clipboard)
 	}
 
 	// Interactive mode
+	return fillInteractive(cfg, clipboard)
+}
+
+func fillSingleField(cfg *Config, fieldName string, clipboard Clipboard) error {
+	value, ok := cfg.GetField(fieldName)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "❌ Unknown field: %s\n", fieldName)
+		fmt.Println("Available: username, password, recovery_email, recovery_phone")
+		return fmt.Errorf("unknown field: %s", fieldName)
+	}
+	if value == "" {
+		fmt.Printf("⚠️  %s is empty in account.yaml\n", fieldName)
+		return fmt.Errorf("field %s is empty", fieldName)
+	}
+	if err := clipboard.Copy(value); err != nil {
+		return fmt.Errorf("error copying to clipboard: %w", err)
+	}
+	fmt.Printf("📋 %s → copied to clipboard\n", fieldName)
+	return nil
+}
+
+func fillInteractive(cfg *Config, clipboard Clipboard) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Println("═══════════════════════════════════════")
@@ -110,25 +165,26 @@ func Fill(fieldName string) {
 
 	// Credentials
 	fmt.Println("── Step 2: Credentials ──")
-	copyFieldInteractive(scanner, "Username", cfg.Username)
-	copyFieldInteractive(scanner, "Password", cfg.Password)
+	copyFieldInteractive(scanner, "Username", cfg.Username, clipboard)
+	copyFieldInteractive(scanner, "Password", cfg.Password, clipboard)
 	fmt.Println()
 
 	// Recovery
 	fmt.Println("── Step 3: Recovery (after signup) ──")
-	copyFieldInteractive(scanner, "Recovery Email", cfg.Recovery.RecoveryEmail)
-	copyFieldInteractive(scanner, "Recovery Phone", cfg.Recovery.RecoveryPhone)
+	copyFieldInteractive(scanner, "Recovery Email", cfg.Recovery.RecoveryEmail, clipboard)
+	copyFieldInteractive(scanner, "Recovery Phone", cfg.Recovery.RecoveryPhone, clipboard)
 	fmt.Println()
 
 	fmt.Println("✅ Done! Complete any CAPTCHA/verification manually.")
+	return nil
 }
 
-func copyFieldInteractive(scanner *bufio.Scanner, label, value string) {
+func copyFieldInteractive(scanner *bufio.Scanner, label, value string, clipboard Clipboard) {
 	if value == "" {
 		fmt.Printf("⏭  %s: (empty, skipping)\n", label)
 		return
 	}
-	if err := copyToClipboard(value); err != nil {
+	if err := clipboard.Copy(value); err != nil {
 		fmt.Fprintf(os.Stderr, "   Error copying: %v\n", err)
 		return
 	}
