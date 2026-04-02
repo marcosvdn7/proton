@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"proton-signup/cmd"
+	"proton/cmd/mail"
+	"proton/cmd/signin"
+	"proton/cmd/signup"
 )
 
 func main() {
@@ -13,37 +15,33 @@ func main() {
 		os.Exit(1)
 	}
 
-	switch os.Args[1] {
-	case "init":
-		cmd.Init()
-	case "check":
-		if len(os.Args) < 3 {
-			fmt.Println("Usage: proton-signup check <username>")
-			os.Exit(1)
-		}
-		cmd.Check(os.Args[2])
-	case "fill":
-		field := ""
-		if len(os.Args) >= 3 {
-			field = os.Args[2]
-		}
-		cmd.Fill(field)
+	command := os.Args[1]
+	args := os.Args[2:]
+
+	switch command {
+	case "signup":
+		signup.Run(args)
+	case "signin":
+		signin.Run(args)
+	case "mail":
+		mail.Run(args)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
-		fmt.Printf("Unknown command: %s\n\n", os.Args[1])
+		fmt.Printf("Unknown command: %s\n\n", command)
 		printUsage()
 		os.Exit(1)
 	}
 }
 
 func printUsage() {
-	fmt.Println(`proton-signup — Proton account signup helper
+	fmt.Println(`proton — Proton Mail CLI tool
 
 Commands:
-  init             Generate a default account.yaml template
-  check <username> Check if a Proton username is available
-  fill             Interactive mode: copy each field to clipboard
-  fill <field>     Copy a single field (username, password, recovery_email, recovery_phone)
-  help             Show this help message`)
+  signup    Account creation helper (check username, generate config, fill form)
+  signin    Sign in to your Proton account (coming soon)
+  mail      Manage emails: fetch, read, reply (coming soon)
+  help      Show this help message
+
+Run 'proton <command> help' for details on a specific command.`)
 }

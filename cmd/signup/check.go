@@ -1,4 +1,4 @@
-package cmd
+package signup
 
 import (
 	"encoding/json"

@@ -1,4 +1,4 @@
-package cmd
+package signup
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 )
 
 const defaultYAML = `# Proton Account Signup Info
-# Fill in the fields below, then run: proton-signup fill
+# Fill in the fields below, then run: proton signup fill
 
 # Plan: Free | Mail Plus | Proton Unlimited | Proton Family
 plan: "Free"

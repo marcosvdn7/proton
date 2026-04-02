@@ -1,4 +1,4 @@
-package cmd
+package signup
 
 import (
 	"bufio"
@@ -28,7 +28,7 @@ type field struct {
 func loadConfig() (*Config, error) {
 	data, err := os.ReadFile("account.yaml")
 	if err != nil {
-		return nil, fmt.Errorf("cannot read account.yaml: %w\n\nRun 'proton-signup init' to create one")
+		return nil, fmt.Errorf("cannot read account.yaml: %w\n\nRun 'proton signup init' to create one")
 	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
@@ -110,20 +110,20 @@ func Fill(fieldName string) {
 
 	// Credentials
 	fmt.Println("── Step 2: Credentials ──")
-	copyField(scanner, "Username", cfg.Username)
-	copyField(scanner, "Password", cfg.Password)
+	copyFieldInteractive(scanner, "Username", cfg.Username)
+	copyFieldInteractive(scanner, "Password", cfg.Password)
 	fmt.Println()
 
 	// Recovery
 	fmt.Println("── Step 3: Recovery (after signup) ──")
-	copyField(scanner, "Recovery Email", cfg.Recovery.RecoveryEmail)
-	copyField(scanner, "Recovery Phone", cfg.Recovery.RecoveryPhone)
+	copyFieldInteractive(scanner, "Recovery Email", cfg.Recovery.RecoveryEmail)
+	copyFieldInteractive(scanner, "Recovery Phone", cfg.Recovery.RecoveryPhone)
 	fmt.Println()
 
 	fmt.Println("✅ Done! Complete any CAPTCHA/verification manually.")
 }
 
-func copyField(scanner *bufio.Scanner, label, value string) {
+func copyFieldInteractive(scanner *bufio.Scanner, label, value string) {
 	if value == "" {
 		fmt.Printf("⏭  %s: (empty, skipping)\n", label)
 		return

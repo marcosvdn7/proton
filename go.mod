@@ -1,4 +1,4 @@
-module proton-signup
+module proton
 
 go 1.26.1
 
