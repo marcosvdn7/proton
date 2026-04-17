@@ -3,13 +3,15 @@ package log
 import (
 	"log/slog"
 	"os"
+	"sync"
 )
 
-var logger *slog.Logger
+var (
+	logger *slog.Logger
+	once   sync.Once
+)
 
-// Init initializes the logger with the specified verbosity level.
-// If verbose is true, sets log level to Debug, otherwise to Info.
-func Init(verbose bool) {
+func initLogger(verbose bool) {
 	level := slog.LevelInfo
 	if verbose {
 		level = slog.LevelDebug
@@ -22,34 +24,41 @@ func Init(verbose bool) {
 	logger = slog.New(handler)
 }
 
-// Info logs an info level message
+// Init initializes the logger with the specified verbosity level.
+// If verbose is true, sets log level to Debug, otherwise to Info.
+// Safe to call concurrently; only the first call takes effect.
+func Init(verbose bool) {
+	once.Do(func() {
+		initLogger(verbose)
+	})
+}
+
+func ensureInit() {
+	once.Do(func() {
+		initLogger(false)
+	})
+}
+
+// Info logs an info level message.
 func Info(msg string, args ...any) {
-	if logger == nil {
-		Init(false) // Initialize with default settings if not already initialized
-	}
+	ensureInit()
 	logger.Info(msg, args...)
 }
 
-// Debug logs a debug level message
+// Debug logs a debug level message.
 func Debug(msg string, args ...any) {
-	if logger == nil {
-		Init(false) // Initialize with default settings if not already initialized
-	}
+	ensureInit()
 	logger.Debug(msg, args...)
 }
 
-// Error logs an error level message
+// Error logs an error level message.
 func Error(msg string, args ...any) {
-	if logger == nil {
-		Init(false) // Initialize with default settings if not already initialized
-	}
+	ensureInit()
 	logger.Error(msg, args...)
 }
 
-// Warn logs a warn level message
+// Warn logs a warn level message.
 func Warn(msg string, args ...any) {
-	if logger == nil {
-		Init(false) // Initialize with default settings if not already initialized
-	}
+	ensureInit()
 	logger.Warn(msg, args...)
 }

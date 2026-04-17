@@ -5,6 +5,7 @@ import (
 	"os"
 )
 
+// Run dispatches signup subcommands: check, init, fill, help.
 func Run(args []string) {
 	if len(args) == 0 {
 		printUsage()

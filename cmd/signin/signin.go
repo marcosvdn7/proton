@@ -2,6 +2,7 @@ package signin
 
 import "fmt"
 
+// Run handles the signin subcommand (placeholder).
 func Run(args []string) {
 	if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
 		printUsage()

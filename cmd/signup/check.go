@@ -7,16 +7,17 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"time"
 
 	"proton/internal/log"
 )
 
-// HTTPClient defines the interface for making HTTP requests
+// HTTPClient defines the interface for making HTTP requests.
 type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-// CheckResult represents the result of a username availability check
+// CheckResult represents the result of a username availability check.
 type CheckResult struct {
 	Available   bool     `json:"available"`
 	Suggestions []string `json:"suggestions"`
@@ -31,10 +32,10 @@ type availabilityResponse struct {
 	} `json:"Details"`
 }
 
-// ProtonAvailabilityEndpoint is the default Proton API endpoint for username checks
+// ProtonAvailabilityEndpoint is the default Proton API endpoint for username checks.
 const ProtonAvailabilityEndpoint = "https://mail-api.proton.me/api/users/available"
 
-// CheckAvailability checks username availability against the Proton API
+// CheckAvailability checks username availability against the Proton API.
 func CheckAvailability(username string, client HTTPClient) (*CheckResult, error) {
 	return CheckAvailabilityWithEndpoint(username, client, ProtonAvailabilityEndpoint)
 }
@@ -57,6 +58,9 @@ func CheckAvailabilityWithEndpoint(username string, client HTTPClient, endpoint 
 
 	resp, err := client.Do(req)
 	if err != nil {
+		if resp != nil {
+			resp.Body.Close()
+		}
 		return nil, fmt.Errorf("error contacting Proton API: %w", err)
 	}
 	defer resp.Body.Close()
@@ -93,12 +97,13 @@ func CheckAvailabilityWithEndpoint(username string, client HTTPClient, endpoint 
 	return result, nil
 }
 
-// Check is a wrapper around CheckAvailability that handles CLI output and exit codes
-// This maintains the original CLI interface
+// defaultHTTPClient is a pre-configured HTTP client with sensible timeouts.
+var defaultHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+// Check is a wrapper around CheckAvailability that handles CLI output and exit codes.
 func Check(username string) {
-	result, err := CheckAvailability(username, http.DefaultClient)
+	result, err := CheckAvailability(username, defaultHTTPClient)
 	if err != nil {
-		log.Error("Username check failed", "error", err)
 		fmt.Fprintf(os.Stderr, "Error checking username: %v\n", err)
 		os.Exit(1)
 	}

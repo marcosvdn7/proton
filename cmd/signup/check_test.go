@@ -27,8 +27,7 @@ func TestCheckAvailability_Available(t *testing.T) {
 	server := makeServer(t, 1000, "", nil)
 	defer server.Close()
 
-	// Override endpoint by creating a custom client that redirects
-	client := &redirectClient{server.URL, server.Client()}
+	client := &testClient{server.Client()}
 
 	result, err := CheckAvailabilityWithEndpoint("TestUser", client, server.URL+"/api/users/available")
 	if err != nil {
@@ -50,7 +49,7 @@ func TestCheckAvailability_Taken(t *testing.T) {
 	server := makeServer(t, 12106, "Username already used", suggestions)
 	defer server.Close()
 
-	client := &redirectClient{server.URL, server.Client()}
+	client := &testClient{server.Client()}
 
 	result, err := CheckAvailabilityWithEndpoint("TakenUser", client, server.URL+"/api/users/available")
 	if err != nil {
@@ -76,7 +75,7 @@ func TestCheckAvailability_UnexpectedCode(t *testing.T) {
 	server := makeServer(t, 9999, "Something weird", nil)
 	defer server.Close()
 
-	client := &redirectClient{server.URL, server.Client()}
+	client := &testClient{server.Client()}
 
 	result, err := CheckAvailabilityWithEndpoint("User", client, server.URL+"/api/users/available")
 	if err != nil {
@@ -91,12 +90,11 @@ func TestCheckAvailability_UnexpectedCode(t *testing.T) {
 }
 
 func TestCheckAvailability_NetworkError(t *testing.T) {
-	// Create server and immediately close it to simulate network error
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	serverURL := server.URL
 	server.Close()
 
-	client := &redirectClient{serverURL, http.DefaultClient}
+	client := &testClient{http.DefaultClient}
 
 	_, err := CheckAvailabilityWithEndpoint("User", client, serverURL+"/api/users/available")
 	if err == nil {
@@ -110,7 +108,7 @@ func TestCheckAvailability_InvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &redirectClient{server.URL, server.Client()}
+	client := &testClient{server.Client()}
 
 	_, err := CheckAvailabilityWithEndpoint("User", client, server.URL+"/api/users/available")
 	if err == nil {
@@ -124,7 +122,7 @@ func TestCheckAvailability_EmptyBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &redirectClient{server.URL, server.Client()}
+	client := &testClient{server.Client()}
 
 	result, err := CheckAvailabilityWithEndpoint("User", client, server.URL+"/api/users/available")
 	if err != nil {
@@ -138,12 +136,11 @@ func TestCheckAvailability_EmptyBody(t *testing.T) {
 	}
 }
 
-// redirectClient wraps an HTTP client to use test server URL
-type redirectClient struct {
-	baseURL string
-	inner   *http.Client
+// testClient wraps an HTTP client to satisfy the HTTPClient interface in tests.
+type testClient struct {
+	inner *http.Client
 }
 
-func (c *redirectClient) Do(req *http.Request) (*http.Response, error) {
+func (c *testClient) Do(req *http.Request) (*http.Response, error) {
 	return c.inner.Do(req)
 }

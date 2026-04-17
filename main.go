@@ -14,7 +14,7 @@ func main() {
 	// Parse --verbose flag and remove it from args
 	verbose := false
 	args := os.Args[1:]
-	var filteredArgs []string
+	filteredArgs := make([]string, 0, len(args))
 	for _, arg := range args {
 		if arg == "--verbose" || arg == "-v" {
 			verbose = true
