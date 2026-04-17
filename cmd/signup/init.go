@@ -7,7 +7,7 @@ import (
 	"proton/internal/log"
 )
 
-// DefaultYAML is the default YAML template for account configuration
+// DefaultYAML is the default YAML template for account configuration.
 const DefaultYAML = `# Proton Account Signup Info
 # Fill in the fields below, then run: proton signup fill
 
@@ -15,7 +15,7 @@ const DefaultYAML = `# Proton Account Signup Info
 plan: "Free"
 
 # Account Credentials
-username: "LucianoJr"    # Will become <username>@proton.me
+username: ""              # Will become <username>@proton.me
 password: ""              # Min 8 chars, use a strong password!
 
 # Recovery (optional, prompted after account creation)

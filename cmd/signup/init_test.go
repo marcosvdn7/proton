@@ -27,18 +27,16 @@ func TestInitConfig_CreatesNewFile(t *testing.T) {
 		t.Fatal("created file is empty")
 	}
 
-	// Verify it's valid YAML
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("generated YAML is invalid: %v", err)
 	}
 
-	// Verify default values
 	if cfg.Plan != "Free" {
 		t.Errorf("expected plan 'Free', got %q", cfg.Plan)
 	}
-	if cfg.Username != "LucianoJr" {
-		t.Errorf("expected username 'LucianoJr', got %q", cfg.Username)
+	if cfg.Username != "" {
+		t.Errorf("expected empty username placeholder, got %q", cfg.Username)
 	}
 	if cfg.Password != "" {
 		t.Errorf("expected empty password, got %q", cfg.Password)
@@ -49,7 +47,6 @@ func TestInitConfig_FileExistsNoOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
 
-	// Create existing file
 	os.WriteFile(path, []byte("existing content"), 0644)
 
 	err := InitConfig(path, false)
@@ -60,7 +57,6 @@ func TestInitConfig_FileExistsNoOverwrite(t *testing.T) {
 		t.Errorf("expected 'already exists' in error, got: %v", err)
 	}
 
-	// Verify original content is preserved
 	data, _ := os.ReadFile(path)
 	if string(data) != "existing content" {
 		t.Error("original file content was modified")
@@ -71,7 +67,6 @@ func TestInitConfig_FileExistsOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
 
-	// Create existing file
 	os.WriteFile(path, []byte("old content"), 0644)
 
 	err := InitConfig(path, true)
@@ -84,7 +79,6 @@ func TestInitConfig_FileExistsOverwrite(t *testing.T) {
 		t.Error("file was not overwritten")
 	}
 
-	// Verify new content is valid
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("overwritten YAML is invalid: %v", err)
@@ -92,7 +86,6 @@ func TestInitConfig_FileExistsOverwrite(t *testing.T) {
 }
 
 func TestInitConfig_WritePermissionError(t *testing.T) {
-	// Try to write to a path that doesn't exist and can't be created
 	path := "/nonexistent/dir/account.yaml"
 
 	err := InitConfig(path, false)
@@ -102,7 +95,6 @@ func TestInitConfig_WritePermissionError(t *testing.T) {
 }
 
 func TestInitConfig_DefaultYAMLContainsExpectedFields(t *testing.T) {
-	// Verify the template contains all expected fields
 	for _, expected := range []string{"plan:", "username:", "password:", "recovery_email:", "recovery_phone:"} {
 		if !strings.Contains(DefaultYAML, expected) {
 			t.Errorf("DefaultYAML missing field %q", expected)
@@ -121,7 +113,6 @@ func TestInitConfig_FilePermissions(t *testing.T) {
 		t.Fatalf("failed to stat file: %v", err)
 	}
 
-	// Should be readable/writable by owner (0644)
 	perm := info.Mode().Perm()
 	if perm&0600 != 0600 {
 		t.Errorf("expected owner read/write permission, got %o", perm)
