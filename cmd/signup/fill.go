@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -18,12 +19,34 @@ type Clipboard interface {
 	Copy(text string) error
 }
 
-// PbCopyClipboard implements Clipboard using macOS pbcopy command.
-type PbCopyClipboard struct{}
+// NewClipboard returns a platform-appropriate Clipboard implementation.
+func NewClipboard() (Clipboard, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		return &execClipboard{cmd: "pbcopy"}, nil
+	case "linux":
+		// Try xclip first, then xsel
+		if _, err := exec.LookPath("xclip"); err == nil {
+			return &execClipboard{cmd: "xclip", args: []string{"-selection", "clipboard"}}, nil
+		}
+		if _, err := exec.LookPath("xsel"); err == nil {
+			return &execClipboard{cmd: "xsel", args: []string{"--clipboard", "--input"}}, nil
+		}
+		return nil, fmt.Errorf("no clipboard tool found: install xclip or xsel")
+	default:
+		return nil, fmt.Errorf("clipboard not supported on %s (supported: darwin, linux)", runtime.GOOS)
+	}
+}
 
-// Copy copies text to clipboard using pbcopy.
-func (c *PbCopyClipboard) Copy(text string) error {
-	cmd := exec.Command("pbcopy")
+// execClipboard implements Clipboard by piping to an external command.
+type execClipboard struct {
+	cmd  string
+	args []string
+}
+
+// Copy copies text to clipboard using the configured command.
+func (c *execClipboard) Copy(text string) error {
+	cmd := exec.Command(c.cmd, c.args...)
 	cmd.Stdin = strings.NewReader(text)
 	return cmd.Run()
 }
@@ -84,12 +107,13 @@ func (cfg *Config) GetField(name string) (string, bool) {
 }
 
 // Fill handles field filling with clipboard functionality.
-func Fill(fieldName string) {
-	clipboard := &PbCopyClipboard{}
-	if err := FillWithClipboard(fieldName, DefaultConfigPath, clipboard); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+// Returns an error instead of calling os.Exit — let the caller decide.
+func Fill(fieldName string) error {
+	clipboard, err := NewClipboard()
+	if err != nil {
+		return err
 	}
+	return FillWithClipboard(fieldName, DefaultConfigPath, clipboard)
 }
 
 // FillWithClipboard handles field filling with a configurable clipboard and config path.

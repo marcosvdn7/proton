@@ -102,7 +102,7 @@ func TestInitConfig_DefaultYAMLContainsExpectedFields(t *testing.T) {
 	}
 }
 
-func TestInitConfig_FilePermissions(t *testing.T) {
+func TestInitConfig_FilePermissions_OwnerOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
 
@@ -114,7 +114,8 @@ func TestInitConfig_FilePermissions(t *testing.T) {
 	}
 
 	perm := info.Mode().Perm()
-	if perm&0600 != 0600 {
-		t.Errorf("expected owner read/write permission, got %o", perm)
+	// Config file holds passwords — MUST be 0600 (owner-only), NOT 0644.
+	if perm != 0600 {
+		t.Errorf("expected 0600 (owner read/write only), got %04o — this file holds passwords!", perm)
 	}
 }

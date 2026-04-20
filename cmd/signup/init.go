@@ -38,7 +38,8 @@ func InitConfig(path string, overwrite bool) error {
 	}
 
 	log.Info("Creating configuration file", "path", path)
-	if err := os.WriteFile(path, []byte(DefaultYAML), 0644); err != nil {
+	// 0600: owner read/write only — this file holds passwords.
+	if err := os.WriteFile(path, []byte(DefaultYAML), 0600); err != nil {
 		log.Error("Failed to write configuration file", "path", path, "error", err)
 		return fmt.Errorf("error writing %s: %w", path, err)
 	}
@@ -48,8 +49,8 @@ func InitConfig(path string, overwrite bool) error {
 }
 
 // Init creates an account.yaml configuration file with interactive prompts.
-// It handles user confirmation for overwriting existing files.
-func Init() {
+// Returns an error instead of calling os.Exit — let the caller decide.
+func Init() error {
 	path := "account.yaml"
 	overwrite := false
 
@@ -60,14 +61,14 @@ func Init() {
 		if answer != "y" && answer != "Y" {
 			fmt.Println("Aborted.")
 			log.Info("User aborted configuration file creation")
-			return
+			return nil
 		}
 		overwrite = true
 	}
 
 	if err := InitConfig(path, overwrite); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	fmt.Printf("✅ Created %s — edit it with your details.\n", path)
+	return nil
 }

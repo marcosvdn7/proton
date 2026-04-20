@@ -1,12 +1,12 @@
 package signup
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"time"
 
 	"proton/internal/log"
@@ -48,7 +48,10 @@ func CheckAvailabilityWithEndpoint(username string, client HTTPClient, endpoint 
 	endpoint = endpoint + "?Name=" + url.QueryEscape(username)
 	log.Debug("Making API request", "endpoint", endpoint)
 
-	req, err := http.NewRequest("GET", endpoint, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
@@ -100,12 +103,12 @@ func CheckAvailabilityWithEndpoint(username string, client HTTPClient, endpoint 
 // defaultHTTPClient is a pre-configured HTTP client with sensible timeouts.
 var defaultHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
-// Check is a wrapper around CheckAvailability that handles CLI output and exit codes.
-func Check(username string) {
+// Check checks username availability and prints the result.
+// Returns an error instead of calling os.Exit — let the caller decide.
+func Check(username string) error {
 	result, err := CheckAvailability(username, defaultHTTPClient)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error checking username: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("checking username: %w", err)
 	}
 
 	switch result.Code {
@@ -122,4 +125,5 @@ func Check(username string) {
 	default:
 		fmt.Printf("⚠️  Unexpected response (code %d)\n", result.Code)
 	}
+	return nil
 }
