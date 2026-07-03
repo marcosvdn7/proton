@@ -2,6 +2,7 @@ package signup
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,23 +20,55 @@ type Clipboard interface {
 	Copy(text string) error
 }
 
+// LookPathFunc mirrors exec.LookPath. Injectable for tests.
+type LookPathFunc func(string) (string, error)
+
+// EnvFunc mirrors os.Getenv. Injectable for tests.
+type EnvFunc func(string) string
+
 // NewClipboard returns a platform-appropriate Clipboard implementation.
 func NewClipboard() (Clipboard, error) {
-	switch runtime.GOOS {
+	return pickClipboard(runtime.GOOS, os.Getenv, exec.LookPath)
+}
+
+// pickClipboard is the pure, testable core of NewClipboard.
+// goos is expected to be a runtime.GOOS value ("darwin", "linux", "windows", ...).
+func pickClipboard(goos string, env EnvFunc, lookPath LookPathFunc) (Clipboard, error) {
+	switch goos {
 	case "darwin":
 		return &execClipboard{cmd: "pbcopy"}, nil
+	case "windows":
+		return &execClipboard{cmd: "clip"}, nil
 	case "linux":
-		// Try xclip first, then xsel
-		if _, err := exec.LookPath("xclip"); err == nil {
-			return &execClipboard{cmd: "xclip", args: []string{"-selection", "clipboard"}}, nil
-		}
-		if _, err := exec.LookPath("xsel"); err == nil {
-			return &execClipboard{cmd: "xsel", args: []string{"--clipboard", "--input"}}, nil
-		}
-		return nil, fmt.Errorf("no clipboard tool found: install xclip or xsel")
+		return pickLinuxClipboard(env, lookPath)
 	default:
-		return nil, fmt.Errorf("clipboard not supported on %s (supported: darwin, linux)", runtime.GOOS)
+		return nil, fmt.Errorf("clipboard not supported on %s (supported: darwin, linux, windows)", goos)
 	}
+}
+
+// pickLinuxClipboard resolves the best clipboard tool for the current Linux
+// session. Preference order:
+//  1. WSL   -> clip.exe (talks to the Windows host clipboard)
+//  2. Wayland -> wl-copy (from wl-clipboard)
+//  3. X11   -> xclip, then xsel
+func pickLinuxClipboard(env EnvFunc, lookPath LookPathFunc) (Clipboard, error) {
+	if env("WSL_DISTRO_NAME") != "" {
+		if p, err := lookPath("clip.exe"); err == nil {
+			return &execClipboard{cmd: p}, nil
+		}
+	}
+	if env("WAYLAND_DISPLAY") != "" {
+		if _, err := lookPath("wl-copy"); err == nil {
+			return &execClipboard{cmd: "wl-copy"}, nil
+		}
+	}
+	if _, err := lookPath("xclip"); err == nil {
+		return &execClipboard{cmd: "xclip", args: []string{"-selection", "clipboard"}}, nil
+	}
+	if _, err := lookPath("xsel"); err == nil {
+		return &execClipboard{cmd: "xsel", args: []string{"--clipboard", "--input"}}, nil
+	}
+	return nil, errors.New("no clipboard tool found: install wl-clipboard (Wayland) or xclip/xsel (X11)")
 }
 
 // execClipboard implements Clipboard by piping to an external command.

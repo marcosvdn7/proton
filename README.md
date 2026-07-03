@@ -20,7 +20,12 @@ A command-line interface for Proton Mail — manage your account, emails, and mo
 
 ### Prerequisites
 - [Go](https://go.dev/dl/) 1.21+
-- macOS (clipboard support uses `pbcopy` — Linux/Windows support planned)
+- A clipboard tool for the interactive fill flow:
+  - **macOS** — `pbcopy` (built-in)
+  - **Windows** — `clip` (built-in)
+  - **WSL** — `clip.exe` (built-in, reachable from Linux)
+  - **Linux (Wayland)** — `wl-copy` from [`wl-clipboard`](https://github.com/bugaevc/wl-clipboard)
+  - **Linux (X11)** — `xclip` or `xsel`
 
 ### Build from source
 
@@ -137,7 +142,7 @@ proton/
 - [x] Username availability checker via Proton public API
 - [x] YAML config template generation
 - [x] Interactive clipboard form filler
-- [ ] Cross-platform clipboard (Linux `xclip`/`xsel`, Windows `clip`)
+- [x] Cross-platform clipboard (macOS `pbcopy`, Windows `clip`, WSL `clip.exe`, Linux Wayland `wl-copy`, Linux X11 `xclip`/`xsel`)
 - [ ] Batch username check (try multiple variations)
 - [ ] Password strength validator
 
