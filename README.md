@@ -55,17 +55,45 @@ Commands:
 
 ### Check if a username is available
 
+Check one or many usernames in a single call. Requests run concurrently
+(cap 5 in flight) and output preserves input order.
+
 ```bash
 $ proton signup check LucianoJr
-❌ LucianoJr@proton.me is already taken.
+❌ LucianoJr@proton.me      (suggestions: LucianoJr7, LucianoJr6, LucianoJr8)
 
-💡 Suggestions:
-   • LucianoJr7@proton.me
-   • LucianoJr6@proton.me
-   • LucianoJr8@proton.me
+$ proton signup check LucianoJr LucianoJr7 marcosnsc
+❌ LucianoJr@proton.me      (suggestions: LucianoJr8, LucianoJr5, LucianoJr0)
+✅ LucianoJr7@proton.me
+❌ marcosnsc@proton.me      (suggestions: marcosnsc7, marcosnsc0, marcosnsc6)
+```
 
-$ proton signup check LucianoJr7
-✅ LucianoJr7@proton.me is available!
+Exit code is `0` if at least one name was available, otherwise `1` —
+handy for scripts:
+
+```bash
+if proton signup check luciano lucianojr; then
+  echo "pick one!"
+fi
+```
+
+Machine-readable output with `--json`:
+
+```bash
+$ proton signup check --json LucianoJr LucianoJr7
+[
+  {
+    "username": "LucianoJr",
+    "available": false,
+    "code": 12106,
+    "suggestions": ["LucianoJr8", "LucianoJr5", "LucianoJr0"]
+  },
+  {
+    "username": "LucianoJr7",
+    "available": true,
+    "code": 1000
+  }
+]
 ```
 
 ### Generate a signup config
@@ -143,7 +171,8 @@ proton/
 - [x] YAML config template generation
 - [x] Interactive clipboard form filler
 - [x] Cross-platform clipboard (macOS `pbcopy`, Windows `clip`, WSL `clip.exe`, Linux Wayland `wl-copy`, Linux X11 `xclip`/`xsel`)
-- [ ] Batch username check (try multiple variations)
+- [x] Batch username check (multiple names at once, `--json` output)
+- [ ] Username variation generator (`--generate` / `suggest` subcommand)
 - [ ] Password strength validator
 
 ### Phase 2 — Authentication
