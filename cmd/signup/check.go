@@ -7,6 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"proton/internal/log"
@@ -103,27 +106,107 @@ func CheckAvailabilityWithEndpoint(username string, client HTTPClient, endpoint 
 // defaultHTTPClient is a pre-configured HTTP client with sensible timeouts.
 var defaultHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
-// Check checks username availability and prints the result.
+// Check checks a single username's availability and prints the result.
+// Thin wrapper around CheckBatch for backward compatibility.
 // Returns an error instead of calling os.Exit — let the caller decide.
 func Check(username string) error {
-	result, err := CheckAvailability(username, defaultHTTPClient)
-	if err != nil {
-		return fmt.Errorf("checking username: %w", err)
+	_, err := CheckBatch([]string{username}, false)
+	return err
+}
+
+// BatchResult is one entry in a CheckBatch response, ready for human or JSON output.
+type BatchResult struct {
+	Username    string   `json:"username"`
+	Available   bool     `json:"available"`
+	Code        int      `json:"code,omitempty"`
+	Suggestions []string `json:"suggestions,omitempty"`
+	Error       string   `json:"error,omitempty"`
+}
+
+// batchConcurrency caps in-flight requests to avoid hammering the API.
+const batchConcurrency = 5
+
+// CheckBatch checks many usernames concurrently, prints the results, and
+// reports whether at least one was available.
+//
+// When jsonOut is true, results are emitted as a JSON array on stdout with no
+// other decoration — safe to pipe. Otherwise the emoji/human format is used.
+// Input order is preserved in both output modes.
+func CheckBatch(usernames []string, jsonOut bool) (anyAvailable bool, err error) {
+	return checkBatchWith(usernames, jsonOut, defaultHTTPClient, ProtonAvailabilityEndpoint, os.Stdout)
+}
+
+// checkBatchWith is the injectable core of CheckBatch: it takes the HTTP
+// client, endpoint, and output writer so tests don't need to touch the network
+// or stdout.
+func checkBatchWith(usernames []string, jsonOut bool, client HTTPClient, endpoint string, out io.Writer) (bool, error) {
+	if len(usernames) == 0 {
+		return false, fmt.Errorf("no usernames provided")
 	}
 
-	switch result.Code {
-	case 1000:
-		fmt.Printf("✅ %s@proton.me is available!\n", username)
-	case 12106:
-		fmt.Printf("❌ %s@proton.me is already taken.\n", username)
-		if len(result.Suggestions) > 0 {
-			fmt.Println("\n💡 Suggestions:")
-			for _, s := range result.Suggestions {
-				fmt.Printf("   • %s@proton.me\n", s)
+	results := make([]BatchResult, len(usernames))
+	sem := make(chan struct{}, batchConcurrency)
+	var wg sync.WaitGroup
+
+	for i, name := range usernames {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, name string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			res, err := CheckAvailabilityWithEndpoint(name, client, endpoint)
+			if err != nil {
+				results[i] = BatchResult{Username: name, Error: err.Error()}
+				return
 			}
-		}
-	default:
-		fmt.Printf("⚠️  Unexpected response (code %d)\n", result.Code)
+			results[i] = BatchResult{
+				Username:    name,
+				Available:   res.Available,
+				Code:        res.Code,
+				Suggestions: res.Suggestions,
+			}
+		}(i, name)
 	}
-	return nil
+	wg.Wait()
+
+	any := false
+	for _, r := range results {
+		if r.Available {
+			any = true
+			break
+		}
+	}
+
+	if jsonOut {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(results); err != nil {
+			return any, fmt.Errorf("encoding json: %w", err)
+		}
+		return any, nil
+	}
+
+	printBatchHuman(out, results)
+	return any, nil
+}
+
+// printBatchHuman writes the emoji/human-friendly output for a batch result.
+func printBatchHuman(out io.Writer, results []BatchResult) {
+	for _, r := range results {
+		switch {
+		case r.Error != "":
+			fmt.Fprintf(out, "⚠️  %s@proton.me — error: %s\n", r.Username, r.Error)
+		case r.Available:
+			fmt.Fprintf(out, "✅ %s@proton.me\n", r.Username)
+		case r.Code == 12106:
+			if len(r.Suggestions) > 0 {
+				fmt.Fprintf(out, "❌ %s@proton.me      (suggestions: %s)\n", r.Username, strings.Join(r.Suggestions, ", "))
+			} else {
+				fmt.Fprintf(out, "❌ %s@proton.me\n", r.Username)
+			}
+		default:
+			fmt.Fprintf(out, "⚠️  %s@proton.me — unexpected response (code %d)\n", r.Username, r.Code)
+		}
+	}
 }

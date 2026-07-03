@@ -1,6 +1,7 @@
 package signup
 
 import (
+	"flag"
 	"fmt"
 	"os"
 )
@@ -17,11 +18,23 @@ func Run(args []string) {
 
 	switch args[0] {
 	case "check":
-		if len(args) < 2 {
-			fmt.Println("Usage: proton signup check <username>")
+		fs := flag.NewFlagSet("signup check", flag.ExitOnError)
+		fs.Usage = func() {
+			fmt.Println("Usage: proton signup check [--json] <username> [username...]")
+		}
+		jsonOut := fs.Bool("json", false, "emit results as a JSON array")
+		_ = fs.Parse(args[1:])
+		names := fs.Args()
+		if len(names) == 0 {
+			fs.Usage()
 			os.Exit(1)
 		}
-		err = Check(args[1])
+		var any bool
+		any, err = CheckBatch(names, *jsonOut)
+		if err == nil && !any {
+			// Non-zero exit lets scripts test 'if proton signup check a b; then ...'
+			os.Exit(1)
+		}
 	case "init":
 		err = Init()
 	case "fill":
@@ -49,7 +62,8 @@ func printUsage() {
 	fmt.Println(`proton signup — Account creation helper
 
 Commands:
-  check <username>  Check if a Proton username is available
+  check <username> [username...] [--json]
+                    Check if one or more Proton usernames are available
   init              Generate a default account.yaml template
   fill              Interactive mode: copy each field to clipboard
   fill <field>      Copy a single field (username, password, recovery_email, recovery_phone)
