@@ -23,8 +23,13 @@ func Run(args []string) {
 			fmt.Println("Usage: proton signup check [--json] <username> [username...]")
 		}
 		jsonOut := fs.Bool("json", false, "emit results as a JSON array")
-		_ = fs.Parse(args[1:])
-		names := fs.Args()
+
+		// stdlib flag.Parse stops at the first non-flag token, so mixing
+		// positional usernames and flags (e.g. 'check foo bar --json') would
+		// silently treat '--json' as a username. Split them up front.
+		flagsOnly, positional := splitFlagsAndPositional(args[1:])
+		_ = fs.Parse(flagsOnly)
+		names := positional
 		if len(names) == 0 {
 			fs.Usage()
 			os.Exit(1)
@@ -56,6 +61,32 @@ func Run(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// splitFlagsAndPositional separates flag tokens from positional args so we can
+// feed only flags to flag.FlagSet.Parse and accept flags in any position.
+//
+// A token is treated as a flag when it starts with '-' (single or double dash).
+// The value that follows a '--name value' style flag is also kept in the flag
+// group. '--name=value' is single-token and handled naturally.
+// '--' terminates flag parsing: everything after is positional.
+func splitFlagsAndPositional(args []string) (flags, positional []string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			positional = append(positional, args[i+1:]...)
+			return
+		}
+		if len(a) > 1 && a[0] == '-' {
+			flags = append(flags, a)
+			continue
+		}
+		// Note: only bool flags and '--name=value' are supported today.
+		// If a future flag needs a separate value token ('--out foo'),
+		// this splitter must be extended to consume it here.
+		positional = append(positional, a)
+	}
+	return
 }
 
 func printUsage() {
