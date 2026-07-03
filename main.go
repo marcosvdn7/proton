@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -11,28 +12,28 @@ import (
 )
 
 func main() {
-	// Parse --verbose flag and remove it from args
-	verbose := false
-	args := os.Args[1:]
-	filteredArgs := make([]string, 0, len(args))
-	for _, arg := range args {
-		if arg == "--verbose" || arg == "-v" {
-			verbose = true
-		} else {
-			filteredArgs = append(filteredArgs, arg)
-		}
-	}
+	// Global flags parsed before the subcommand.
+	// Usage: proton [--verbose|-v] <command> [args...]
+	fs := flag.NewFlagSet("proton", flag.ExitOnError)
+	fs.Usage = printUsage
 
-	// Initialize logger with verbose setting
+	var verbose bool
+	fs.BoolVar(&verbose, "verbose", false, "enable debug logging")
+	fs.BoolVar(&verbose, "v", false, "enable debug logging (shorthand)")
+
+	// Parse stops at first non-flag token, leaving subcommand + its args in fs.Args().
+	_ = fs.Parse(os.Args[1:])
+
 	log.Init(verbose)
 
-	if len(filteredArgs) < 1 {
+	rest := fs.Args()
+	if len(rest) < 1 {
 		printUsage()
 		os.Exit(1)
 	}
 
-	command := filteredArgs[0]
-	args = filteredArgs[1:]
+	command := rest[0]
+	args := rest[1:]
 
 	switch command {
 	case "signup":
