@@ -56,7 +56,7 @@ func printUsage() {
 
 Commands:
   signup    Account creation helper (check username, generate config, fill form)
-  signin    Sign in to your Proton account (coming soon)
+  signin    Sign in to your Proton account (SRP)
   mail      Manage emails: fetch, read, reply (coming soon)
   help      Show this help message
 
