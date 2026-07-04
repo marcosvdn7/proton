@@ -114,11 +114,6 @@ func loadConfigFrom(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// loadConfig loads configuration from the default path.
-func loadConfig() (*Config, error) {
-	return loadConfigFrom(DefaultConfigPath)
-}
-
 // Fields returns all configuration fields as a slice.
 func (cfg *Config) Fields() []Field {
 	return []Field{
