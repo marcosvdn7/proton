@@ -164,6 +164,15 @@ func FillWithClipboard(fieldName, configPath string, clipboard Clipboard) error 
 }
 
 func fillSingleField(cfg *Config, fieldName string, clipboard Clipboard) error {
+	// When copying the password, print a strength summary to stderr so
+	// scripts that read stdout aren't disturbed but the user still sees
+	// a warning if the password is weak.
+	if fieldName == "password" && cfg.Password != "" {
+		report := Analyze(cfg.Password)
+		if report.Score != ScoreStrong {
+			FormatReport(os.Stderr, report)
+		}
+	}
 	value, ok := cfg.GetField(fieldName)
 	if !ok {
 		return fmt.Errorf("unknown field: %s (available: username, password, recovery_email, recovery_phone)", fieldName)
@@ -199,6 +208,28 @@ func fillInteractive(cfg *Config, clipboard Clipboard) error {
 
 	fmt.Println("── Step 2: Credentials ──")
 	copyFieldInteractive(scanner, "Username", cfg.Username, clipboard)
+
+	// Warn the user before we copy a weak or vulnerable password, so
+	// they can abort and edit account.yaml before pasting it into the
+	// signup form. We keep the check next to the copy so it's always
+	// in sync.
+	if cfg.Password != "" {
+		report := Analyze(cfg.Password)
+		if report.Score != ScoreStrong {
+			fmt.Println()
+			FormatReport(os.Stdout, report)
+			if report.Score == ScoreVulnerable {
+				fmt.Print("Continue anyway? [y/N] ")
+				scanner.Scan()
+				ans := strings.TrimSpace(strings.ToLower(scanner.Text()))
+				if ans != "y" && ans != "yes" {
+					fmt.Println("Aborted. Edit account.yaml and re-run 'proton signup fill'.")
+					return nil
+				}
+			}
+			fmt.Println()
+		}
+	}
 	copyFieldInteractive(scanner, "Password", cfg.Password, clipboard)
 	fmt.Println()
 

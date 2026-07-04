@@ -48,6 +48,22 @@ func Run(args []string) {
 			field = args[1]
 		}
 		err = Fill(field)
+	case "validate":
+		fs := flag.NewFlagSet("signup validate", flag.ExitOnError)
+		fs.Usage = func() {
+			fmt.Println("Usage: proton signup validate [--json]")
+			fmt.Println("Reads account.yaml and reports on the password's strength.")
+		}
+		jsonOut := fs.Bool("json", false, "emit report as JSON")
+		flagsOnly, _ := splitFlagsAndPositional(args[1:])
+		_ = fs.Parse(flagsOnly)
+
+		var strong bool
+		strong, err = Validate(*jsonOut)
+		if err == nil && !strong {
+			// Exit 1 when the password is not Strong, so scripts can gate on it.
+			os.Exit(1)
+		}
 	case "help", "-h", "--help":
 		printUsage()
 		return
@@ -98,5 +114,6 @@ Commands:
   init              Generate a default account.yaml template
   fill              Interactive mode: copy each field to clipboard
   fill <field>      Copy a single field (username, password, recovery_email, recovery_phone)
+  validate [--json] Report the strength of the password in account.yaml
   help              Show this help message`)
 }
