@@ -2,3 +2,6 @@ proton
 account.yaml
 .DS_Store
 *.exe
+
+# Agent instructions — local reference, never shared upstream.
+docs/AGENT.md
