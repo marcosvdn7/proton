@@ -3,7 +3,6 @@ package signin
 import (
 	"errors"
 	"io"
-	"os"
 	"testing"
 	"time"
 
@@ -30,17 +29,11 @@ func (f *fakePrompt) ReadPassword(string) ([]byte, error) {
 	return []byte(f.password), nil
 }
 
-// discardOut returns an *os.File that swallows everything written to it —
-// signInWith uses fmt.Fprint on an *os.File so we can't just pass io.Discard.
-// Opening /dev/null keeps signature compatibility without noisy test output.
-func discardOut(t *testing.T) *os.File {
+// discardOut is a plain io.Writer sink used across the sign-in tests to keep
+// the fmt.Fprint output out of go test's log stream.
+func discardOut(t *testing.T) io.Writer {
 	t.Helper()
-	f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatalf("open /dev/null: %v", err)
-	}
-	t.Cleanup(func() { f.Close() })
-	return f
+	return io.Discard
 }
 
 // newTestServer boots the in-memory Proton fake and returns SigninOptions

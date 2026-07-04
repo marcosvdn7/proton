@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -75,7 +76,7 @@ func SignIn(opts SigninOptions) (*SigninResult, error) {
 
 // signInWith is the injectable core: takes a prompter and an output writer so
 // tests never touch the real terminal or stdout.
-func signInWith(opts SigninOptions, p PromptReader, out *os.File) (*SigninResult, error) {
+func signInWith(opts SigninOptions, p PromptReader, out io.Writer) (*SigninResult, error) {
 	username, err := p.ReadUsername("Proton username or email: ")
 	if err != nil {
 		return nil, fmt.Errorf("reading username: %w", err)
@@ -150,7 +151,7 @@ func signInWith(opts SigninOptions, p PromptReader, out *os.File) (*SigninResult
 }
 
 // printSummary renders the human-facing success message.
-func printSummary(w *os.File, r *SigninResult) {
+func printSummary(w io.Writer, r *SigninResult) {
 	fmt.Fprintln(w, "✅ SRP handshake succeeded")
 	fmt.Fprintf(w, "   User ID:      %s\n", r.UserID)
 	fmt.Fprintf(w, "   Scope:        %s\n", r.Scope)
