@@ -38,30 +38,67 @@ func usernameFromAccountYAML(path string) (string, error) {
 }
 
 // appVersion is the value sent in the x-pm-appversion header that Proton
-// requires on every request. The stable form is <product>@<semver>; picking a
-// clearly non-official prefix keeps our traffic distinguishable from the
-// official web/desktop clients in Proton's abuse metrics.
-const appVersion = "proton-cli@0.1.0"
+// requires on every request.
+//
+// Getting this string right took two 400s worth of learning:
+//
+//  1. The server parses <platform> from the token before the first `_` or
+//     `@` and validates it against an allow-list of official clients
+//     (`web-mail`, `linux-mail`, etc.). Anything else returns HTTP 400
+//     "Platform `<x>` is not valid" — e.g. `proton-cli@0.1.0` gets read as
+//     platform=`proton` and rejected.
+//  2. The server then checks that the app-name portion (everything before
+//     the `@`) is lowercase. `Other_proton-cli` fails this check because
+//     of the capital `O`, returning HTTP 400
+//     "Application name must be in lowercase, got `Other_...`".
+//
+// The only value the go-proton-api maintainers document as safe for
+// third-party clients is the bare literal `Other`, no suffix, no version.
+// That's what the unofficial python client and rclone landed on:
+//   - https://github.com/ProtonMail/go-proton-api/issues/180
+//   - https://github.com/ProtonMail/go-proton-api/issues/227
+//
+// Consequence: our binary version is NOT in the header, so it will not
+// show up in Proton's server-side logs. Sign-in security alerts will
+// render this as "Unknown application" — Proton policy for anything
+// outside the official-client allow-list. Not fixable without Proton
+// whitelisting a `proton-cli` platform for us, which is not a self-serve
+// process.
+const appVersion = "Other"
 
 // defaultTimeout bounds a full SRP handshake (AuthInfo + Auth). Real handshakes
 // take ~1-2s on a healthy link, so 30s is a very generous ceiling that still
 // gives up before a hung TCP connection wastes the user's terminal.
 const defaultTimeout = 30 * time.Second
 
+// defaultPromptTimeout bounds the interactive username + password prompts.
+// Long enough for a distracted user to answer, short enough to release the
+// terminal if they walked away. Separate from defaultTimeout so a slow
+// typist doesn't eat the network budget and vice versa.
+const defaultPromptTimeout = 2 * time.Minute
+
 // SigninResult is returned by SignIn after a successful SRP handshake.
-// It intentionally does NOT include the raw password (already wiped) and
-// does not include the tokens by default — the caller decides how to
-// display or persist them. Currently we only print UserID + basic flags,
-// but the tokens are here so a future persistence step can grab them
-// without touching signin's internals.
+//
+// It carries only non-secret fields:
+//
+//   - UserID / UID / Scope are identifiers, not credentials. UID pairs
+//     with the tokens to make an authenticated call, but on its own it
+//     is inert.
+//   - Requires2FA / TwoPasswordMode drive the caller's follow-up UX.
+//
+// AccessToken and RefreshToken are DELIBERATELY absent. Tokens are
+// bearer credentials — anyone holding them owns the account until
+// server-side revocation. Keeping them off the returned struct means
+// callers cannot accidentally log, print, or route them somewhere
+// unsafe. The tokens live only where they belong: inside the resty
+// client (for the current process) and inside the OS keychain (for the
+// next process), both handed off inside signInWith.
 type SigninResult struct {
-	UserID         string
-	UID            string
-	AccessToken    string
-	RefreshToken   string
-	Scope          string
-	Requires2FA    bool
-	TwoPasswordMod bool
+	UserID          string
+	UID             string
+	Scope           string
+	Requires2FA     bool
+	TwoPasswordMode bool
 }
 
 // SigninOptions is the configurable surface of SignIn. Everything here has a
@@ -83,6 +120,12 @@ type SigninOptions struct {
 	// the internal/keychain package. Tests inject a fake so the CI
 	// keyring is not touched.
 	Persister SessionPersister
+	// PromptTimeout bounds how long we wait for the user to type
+	// username + password before giving up. Zero means
+	// defaultPromptTimeout. Kept separate from Timeout so a slow typist
+	// does not eat the network budget and a slow network does not blame
+	// the user.
+	PromptTimeout time.Duration
 }
 
 // SessionPersister is the narrow interface signin needs from the keychain
@@ -117,7 +160,24 @@ func SignIn(opts SigninOptions) (*SigninResult, error) {
 // signInWith is the injectable core: takes a prompter and an output writer so
 // tests never touch the real terminal or stdout.
 func signInWith(opts SigninOptions, p PromptReader, out io.Writer) (*SigninResult, error) {
-	username, err := p.ReadUsername("Proton username or email: ")
+	if opts.AppVersion == "" {
+		opts.AppVersion = appVersion
+	}
+	if opts.Timeout == 0 {
+		opts.Timeout = defaultTimeout
+	}
+	if opts.PromptTimeout == 0 {
+		opts.PromptTimeout = defaultPromptTimeout
+	}
+
+	// The prompt-phase context bounds "user walked away from the
+	// keyboard" scenarios. It is deliberately separate from the SRP
+	// context below so a slow typist does not consume the network
+	// budget, and a network stall does not blame the user's typing.
+	promptCtx, cancelPrompt := context.WithTimeout(context.Background(), opts.PromptTimeout)
+	defer cancelPrompt()
+
+	username, err := readUsernameCtx(promptCtx, p, "Proton username or email: ")
 	if err != nil {
 		return nil, fmt.Errorf("reading username: %w", err)
 	}
@@ -126,7 +186,7 @@ func signInWith(opts SigninOptions, p PromptReader, out io.Writer) (*SigninResul
 		return nil, errors.New("username cannot be empty")
 	}
 
-	password, err := p.ReadPassword("Password: ")
+	password, err := readPasswordCtx(promptCtx, p, "Password: ")
 	if err != nil {
 		return nil, fmt.Errorf("reading password: %w", err)
 	}
@@ -137,16 +197,20 @@ func signInWith(opts SigninOptions, p PromptReader, out io.Writer) (*SigninResul
 	if len(password) == 0 {
 		return nil, errors.New("password cannot be empty")
 	}
-
-	if opts.AppVersion == "" {
-		opts.AppVersion = appVersion
-	}
-	if opts.Timeout == 0 {
-		opts.Timeout = defaultTimeout
-	}
+	cancelPrompt() // prompts done; free the goroutine budget.
 
 	managerOpts := []proton.Option{
 		proton.WithAppVersion(opts.AppVersion),
+		// Disable resty's default 3-retry policy for the sign-in
+		// manager. go-proton-api retries on HTTP 429 and dial errors
+		// with backoff up to 1 minute (see manager_builder.go
+		// SetRetryCount+SetRetryMaxWaitTime). During a 422 abuse
+		// throttle or a bad-credentials loop, those retries multiply
+		// the number of auth attempts Proton sees per CLI invocation
+		// and can extend the throttle window. Sign-in is a manual,
+		// user-initiated action — if it fails, the user can retype
+		// and rerun. We do not need automatic retries here.
+		proton.WithRetryCount(0),
 	}
 	if opts.HostURL != "" {
 		managerOpts = append(managerOpts, proton.WithHostURL(opts.HostURL))
@@ -161,6 +225,10 @@ func signInWith(opts SigninOptions, p PromptReader, out io.Writer) (*SigninResul
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 	defer cancel()
 
+	// UserID/username stay at Debug level. They are not tokens, but they
+	// are account identifiers, and Info-level logs might end up in
+	// `| tee` output or copy-pasted into bug reports without redaction.
+	// Debug requires --verbose, which is a conscious opt-in.
 	log.Debug("Starting SRP login", "username", username, "host", opts.HostURL, "appVersion", opts.AppVersion)
 
 	client, auth, err := m.NewClientWithLogin(ctx, username, password)
@@ -169,16 +237,15 @@ func signInWith(opts SigninOptions, p PromptReader, out io.Writer) (*SigninResul
 	}
 	defer client.Close()
 
-	log.Info("Signed in", "userID", auth.UserID, "twoFA", auth.TwoFA.Enabled, "passwordMode", auth.PasswordMode)
+	log.Debug("Signed in", "userID", auth.UserID, "twoFA", auth.TwoFA.Enabled, "passwordMode", auth.PasswordMode)
+	log.Info("Sign-in succeeded")
 
 	result := &SigninResult{
-		UserID:         auth.UserID,
-		UID:            auth.UID,
-		AccessToken:    auth.AccessToken,
-		RefreshToken:   auth.RefreshToken,
-		Scope:          auth.Scope,
-		Requires2FA:    auth.TwoFA.Enabled&proton.HasTOTP != 0,
-		TwoPasswordMod: auth.PasswordMode == proton.TwoPasswordMode,
+		UserID:          auth.UserID,
+		UID:             auth.UID,
+		Scope:           auth.Scope,
+		Requires2FA:     auth.TwoFA.Enabled&proton.HasTOTP != 0,
+		TwoPasswordMode: auth.PasswordMode == proton.TwoPasswordMode,
 	}
 
 	// Persist the fresh session so subsequent CLI invocations reuse it
@@ -200,9 +267,16 @@ func signInWith(opts SigninOptions, p PromptReader, out io.Writer) (*SigninResul
 		// Persistence failure is not a hard sign-in failure — the user
 		// has a valid session in this process. Warn and continue so
 		// they at least see the success message and can act on the
-		// warning (fix keychain, re-run signin).
+		// warning. Because tokens live only in this process, the very
+		// next `proton <cmd>` invocation will have to sign in again;
+		// spell that out so the user is not surprised.
 		log.Warn("Could not persist session to keychain", "err", err)
-		fmt.Fprintf(out, "⚠️  Sign-in succeeded but session could not be saved: %v\n", err)
+		fmt.Fprintf(out,
+			"⚠️  Sign-in succeeded but session could not be saved: %v\n"+
+				"   Your next `proton` command will need to sign in again.\n"+
+				"   On Linux, ensure gnome-keyring or KWallet is running,\n"+
+				"   or see docs/FUTURE_DAEMON.md for the headless-fallback plan.\n",
+			err)
 	} else {
 		log.Info("Session persisted to keychain", "user", username)
 	}
@@ -242,7 +316,7 @@ func printSummary(w io.Writer, r *SigninResult) {
 		fmt.Fprintln(w, "   TOTP support is not yet implemented — you can only complete")
 		fmt.Fprintln(w, "   sign-in in a Proton web client for now.")
 	}
-	if r.TwoPasswordMod {
+	if r.TwoPasswordMode {
 		fmt.Fprintln(w, "⚠️  Account uses two-password mode. The mailbox password is needed")
 		fmt.Fprintln(w, "   to unlock keys and is not yet handled by this CLI.")
 	}
@@ -254,8 +328,45 @@ func translateAuthError(err error) error {
 	if errors.Is(err, proton.ErrInvalidProof) {
 		return errors.New("server proof did not verify — refusing to trust this response")
 	}
-	// go-proton-api wraps HTTP 4xx/5xx in resty.ResponseError; we don't need
-	// to peel that here, the string form is already actionable.
+
+	// go-proton-api decodes API errors into a *proton.APIError with a
+	// numeric Status. Match the ones we can be helpful about.
+	var apiErr *proton.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.Status {
+		case http.StatusUnprocessableEntity:
+			// 422 is Proton's abuse-mitigation response — too many
+			// failed / rate-limited auth attempts trigger a
+			// temporary account lock. Give the user actionable
+			// guidance instead of the raw resty dump; the raw
+			// error still gets attached via %w for `--verbose`.
+			return fmt.Errorf(
+				"account temporarily locked by Proton abuse protection.\n"+
+					"  What to do:\n"+
+					"    - Wait 15\u201360 minutes and try again.\n"+
+					"    - Sign in via https://mail.proton.me in a browser to\n"+
+					"      confirm the account is real; that usually clears the lock.\n"+
+					"    - If it persists, appeal at https://proton.me/support/appeal-abuse.\n"+
+					"  Do NOT retry `proton signin` in a loop \u2014 each attempt extends the lock.\n"+
+					"  Underlying error: %w", err)
+		case http.StatusUnauthorized, http.StatusBadRequest:
+			// 400/401 during SRP is almost always "wrong username
+			// or password". Do not tell the user which one —
+			// Proton itself does not distinguish, and neither
+			// should we (usernames are enumerable enough already).
+			return fmt.Errorf("sign-in failed: check your username and password (%w)", err)
+		}
+	}
+
+	// context.DeadlineExceeded means our own Timeout fired before the
+	// handshake finished. Usually the network is stuck; retrying with
+	// --verbose will show which stage timed out.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("sign-in timed out. Check your network and rerun with --verbose to see which stage stalled: %w", err)
+	}
+
+	// Fallback — unknown error type. Preserve the wrapped chain so
+	// --verbose logs still show the resty details.
 	return fmt.Errorf("sign-in failed: %w", err)
 }
 
@@ -265,6 +376,51 @@ func translateAuthError(err error) error {
 func wipe(b []byte) {
 	for i := range b {
 		b[i] = 0
+	}
+}
+
+// readUsernameCtx / readPasswordCtx wrap a PromptReader with a context so
+// prompts do not block forever if the user walks away from the keyboard.
+//
+// Note: cancelling the context does NOT unblock the underlying blocking read
+// (bufio.ReadString / term.ReadPassword). The read goroutine leaks until the
+// user actually types something or the process exits. That is acceptable
+// here because we only exit via os.Exit after this returns, so the goroutine
+// dies with the process. The context serves the caller's timeout accounting,
+// not the goroutine's lifetime.
+func readUsernameCtx(ctx context.Context, p PromptReader, prompt string) (string, error) {
+	type result struct {
+		s   string
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		s, err := p.ReadUsername(prompt)
+		ch <- result{s, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", fmt.Errorf("prompt timed out: %w", ctx.Err())
+	case r := <-ch:
+		return r.s, r.err
+	}
+}
+
+func readPasswordCtx(ctx context.Context, p PromptReader, prompt string) ([]byte, error) {
+	type result struct {
+		b   []byte
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		b, err := p.ReadPassword(prompt)
+		ch <- result{b, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("prompt timed out: %w", ctx.Err())
+	case r := <-ch:
+		return r.b, r.err
 	}
 }
 
@@ -411,7 +567,11 @@ func runLogout(flagUser string, out io.Writer) error {
 }
 
 func printUsage() {
-	fmt.Println(`proton signin — Sign in to your Proton account (SRP)
+	// Usage goes to stderr so `proton signin help | grep foo` (stdout
+	// consumers) do not accidentally pick it up, and so flag-parse
+	// failures print help alongside the error without polluting a piped
+	// success path.
+	fmt.Fprintln(os.Stderr, `proton signin — Sign in to your Proton account (SRP)
 
 Usage:
   proton signin                Prompt for username + password and run the SRP

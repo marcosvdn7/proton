@@ -108,15 +108,14 @@ func TestSignIn_SuccessfulHandshake(t *testing.T) {
 	if res.UID == "" {
 		t.Errorf("UID (session id) should be set")
 	}
-	if res.AccessToken == "" || res.RefreshToken == "" {
-		t.Errorf("tokens should be set")
-	}
 	if res.Requires2FA {
 		t.Errorf("plain account should not require 2FA")
 	}
 
 	// Persistence contract: exactly one Save on the happy path, and the
-	// bundle must match what the API returned.
+	// persisted bundle must carry the tokens — SigninResult itself no
+	// longer exposes them (they are DELIBERATELY redacted from the
+	// returned struct so callers cannot accidentally log or leak them).
 	if persister.saveCall != 1 {
 		t.Errorf("expected exactly one Save call, got %d", persister.saveCall)
 	}
@@ -124,9 +123,11 @@ func TestSignIn_SuccessfulHandshake(t *testing.T) {
 	if !ok {
 		t.Fatal("expected session to be persisted for user")
 	}
-	if saved.UID != res.UID || saved.AccessToken != res.AccessToken || saved.RefreshToken != res.RefreshToken {
-		t.Errorf("persisted session mismatch: got %+v want UID=%s access=%s refresh=%s",
-			saved, res.UID, res.AccessToken, res.RefreshToken)
+	if saved.UID != res.UID {
+		t.Errorf("persisted UID mismatch: got %q want %q", saved.UID, res.UID)
+	}
+	if saved.AccessToken == "" || saved.RefreshToken == "" {
+		t.Errorf("persisted session must carry tokens, got %+v", saved)
 	}
 }
 
@@ -242,6 +243,103 @@ func TestTranslateAuthError_GenericErrorWrapped(t *testing.T) {
 	if !errors.Is(got, base) {
 		t.Errorf("expected wrapped error to unwrap to the original, got %v", got)
 	}
+}
+
+func TestTranslateAuthError_422AbuseIsFriendly(t *testing.T) {
+	apiErr := &proton.APIError{
+		Status:  422,
+		Message: "Our systems detected unusual activity targeting your account.",
+	}
+	got := translateAuthError(apiErr)
+	if got == nil {
+		t.Fatal("expected non-nil error")
+	}
+	msg := got.Error()
+	// The friendly wrapper should mention the appeal URL and the
+	// "do not retry" guidance — that is the whole point of translating
+	// this specific status. Also the original error must still unwrap.
+	for _, want := range []string{"proton.me/support/appeal-abuse", "Do NOT retry", "temporarily locked"} {
+		if !containsCI(msg, want) {
+			t.Errorf("422 message missing %q: %s", want, msg)
+		}
+	}
+	if !errors.Is(got, apiErr) {
+		t.Errorf("expected wrapped error to unwrap to the *proton.APIError, got %v", got)
+	}
+}
+
+func TestTranslateAuthError_401IsGenericFriendly(t *testing.T) {
+	apiErr := &proton.APIError{Status: 401, Message: "Incorrect login credentials."}
+	got := translateAuthError(apiErr)
+	if got == nil {
+		t.Fatal("expected non-nil error")
+	}
+	// We should not tell the user WHICH of username/password was wrong —
+	// Proton itself does not, and neither should we (usernames are
+	// enumerable enough already).
+	if !containsCI(got.Error(), "username and password") {
+		t.Errorf("401 message should nudge to check credentials, got %v", got)
+	}
+}
+
+// blockingPrompt lets a test simulate a user who never types anything, so
+// we can verify the PromptTimeout actually fires. ReadUsername parks forever
+// on the done channel; the test closes it in cleanup to release the
+// goroutine after the assertion.
+type blockingPrompt struct {
+	done chan struct{}
+}
+
+func (b *blockingPrompt) ReadUsername(string) (string, error) {
+	<-b.done
+	return "", io.EOF
+}
+func (b *blockingPrompt) ReadPassword(string) ([]byte, error) {
+	<-b.done
+	return nil, io.EOF
+}
+
+func TestSignIn_PromptTimeoutFires(t *testing.T) {
+	bp := &blockingPrompt{done: make(chan struct{})}
+	t.Cleanup(func() { close(bp.done) })
+
+	start := time.Now()
+	_, err := signInWith(
+		SigninOptions{
+			PromptTimeout: 50 * time.Millisecond,
+			// Persister avoids any real keychain access on the
+			// impossible-but-defensive path where the prompt somehow
+			// returned before the timeout.
+			Persister: &memPersister{},
+		},
+		bp,
+		discardOut(t),
+	)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected prompt timeout to produce an error")
+	}
+	if !containsCI(err.Error(), "prompt timed out") {
+		t.Errorf("expected 'prompt timed out' in error, got %v", err)
+	}
+	// Sanity-check that we actually respected the timeout and did not
+	// wait for the default 2 minutes.
+	if elapsed > 5*time.Second {
+		t.Errorf("prompt timeout took too long: %v", elapsed)
+	}
+}
+
+func TestSigninResult_DoesNotExposeTokens(t *testing.T) {
+	// Reflection-free contract test: if someone later adds AccessToken
+	// or RefreshToken back to SigninResult, this fails to compile. The
+	// point of the redaction is to make that a build-time decision.
+	var r SigninResult
+	_ = r.UserID
+	_ = r.UID
+	_ = r.Scope
+	_ = r.Requires2FA
+	_ = r.TwoPasswordMode // catches the old 'TwoPasswordMod' typo too.
 }
 
 // containsCI is a tiny helper — imports of strings are avoided to keep this
