@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/ProtonMail/go-proton-api v0.4.0
+	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/term v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -21,6 +22,7 @@ require (
 	github.com/bradenaw/juniper v0.8.0 // indirect
 	github.com/cloudflare/circl v1.2.0 // indirect
 	github.com/cronokirby/saferith v0.33.0 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/emersion/go-message v0.16.0 // indirect
 	github.com/emersion/go-textwrapper v0.0.0-20200911093747-65d896831594 // indirect
 	github.com/emersion/go-vcard v0.0.0-20220507122617-d4056df0ec4a // indirect
@@ -31,6 +33,7 @@ require (
 	github.com/go-playground/validator/v10 v10.10.0 // indirect
 	github.com/go-resty/resty/v2 v2.7.0 // indirect
 	github.com/goccy/go-json v0.9.7 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/leodido/go-urn v1.2.1 // indirect
