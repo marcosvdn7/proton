@@ -2,20 +2,29 @@
 
 A command-line interface for Proton Mail — manage your account, emails, and more from the terminal.
 
-> **Status:** Early development. Signup helper is functional; authentication and mail features are in progress.
+> **Status:** Early development. Signup helper, SRP sign-in, and OS-keychain
+> session persistence are functional. TOTP 2FA and the mail commands are next.
 
 ## Features
 
 ### ✅ Signup Helper
-- **Check username availability** against the Proton API with alternative suggestions
+- **Check username availability** against the Proton API with alternative suggestions (batch mode + `--json`)
+- **Password strength validator** matching Proton's own score buckets and penalty labels
 - **Generate config template** (`account.yaml`) for signup details
 - **Interactive form filler** — copies each field to your clipboard step-by-step while you fill the browser form
 
+### ✅ Authentication
+- **SRP-6a sign-in** via [`go-proton-api`](https://github.com/ProtonMail/go-proton-api) — password never leaves the machine
+- **Session persistence** in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service)
+- **Auto-refresh** — background token rotations from the API are re-persisted transparently
+- **`signin --status` / `signin --logout`** for saved-session inspection and cleanup
+
 ### 🚧 Coming Soon
-- **Authentication** — SRP login works (`proton signin`); 2FA, session
-  persistence, and keychain integration are next.
-- **Mail** — Fetch, read, reply, send, and search emails from the terminal
-- **Contacts** — Manage your encrypted address book
+- **TOTP two-factor authentication** on top of the SRP handshake
+- **Two-password mode** mailbox unlock (for encrypted-key accounts)
+- **Mail** — fetch, read, reply, send, and search emails from the terminal
+- **Contacts** — encrypted address book
+- **Session daemon** for headless environments (design sketch in `docs/FUTURE_DAEMON.md`)
 
 ## Installation
 
@@ -27,11 +36,17 @@ A command-line interface for Proton Mail — manage your account, emails, and mo
   - **WSL** — `clip.exe` (built-in, reachable from Linux)
   - **Linux (Wayland)** — `wl-copy` from [`wl-clipboard`](https://github.com/bugaevc/wl-clipboard)
   - **Linux (X11)** — `xclip` or `xsel`
+- An OS keyring for session persistence:
+  - **macOS / Windows** — built-in, nothing to install
+  - **Linux desktop** — `gnome-keyring` or `kwallet` (Secret Service over D-Bus)
+  - **Headless Linux / WSL** — the keyring backend is not available; `signin`
+    still works for the current shell but the session is not persisted. See
+    `docs/FUTURE_DAEMON.md` for the planned fallback.
 
 ### Build from source
 
 ```bash
-git clone https://github.com/iamlucianojr/proton.git
+git clone https://github.com/marcosvdn7/proton.git
 cd proton
 go build -o proton .
 ```
@@ -49,7 +64,7 @@ proton — Proton Mail CLI tool
 
 Commands:
   signup    Account creation helper
-  signin    Sign in to your Proton account (SRP)
+  signin    Sign in to your Proton account (SRP + keychain)
   mail      Manage emails (coming soon)
   help      Show help message
 ```
@@ -155,7 +170,7 @@ $ proton signup fill
 Open: https://account.proton.me/mail/signup
 
 ── Step 1: Plan ──
-📌 Select plan: Free
+📋 Select plan: Free
 
 ── Step 2: Credentials ──
 📋 Username → copied to clipboard
@@ -174,7 +189,7 @@ $ proton signup fill username
 📋 username → copied to clipboard
 ```
 
-### Sign in (SRP)
+### Sign in (SRP + keychain)
 
 ```bash
 $ proton signin
@@ -186,25 +201,62 @@ Password: (hidden)
 ```
 
 The password is used only to compute a local SRP proof; the plaintext
-never leaves your machine. This step verifies credentials and then
-drops the session tokens — 2FA prompts, keychain persistence, and
-long-lived sessions are the next tasks in Phase 2.
+never leaves your machine. On success the resulting session bundle
+(UID + access token + refresh token + scope) is written to the OS
+keychain under the service name `proton-cli`. Background token
+rotations from the Proton API are picked up by an `AuthHandler` and
+re-persisted automatically, so the saved bundle never goes stale.
+
+Inspect the saved session without exposing the tokens:
+
+```bash
+$ proton signin --status
+Saved session for luciano@proton.me
+  UID:         xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  Scope:       self mail
+  Saved at:    2026-04-19T15:04:05Z
+```
+
+Wipe it (idempotent — safe to run twice):
+
+```bash
+$ proton signin --logout
+Signed out luciano@proton.me.
+```
+
+Both `--status` and `--logout` default to the `username` in
+`account.yaml`; use `--user <name>` to target a different account.
+
+TOTP 2FA and two-password mailbox unlock are the next tasks in Phase 2.
+Accounts with 2FA enabled still complete the SRP handshake, but the
+current CLI cannot finish the login — use a Proton web client for now.
 
 ## Project Structure
 
 ```
 proton/
-├── main.go                 # CLI entry point and command router
+├── main.go                       # CLI entry point + global flag parsing
 ├── cmd/
-│   ├── signup/             # ✅ Account creation helper
-│   │   ├── signup.go       #    Subcommand router
-│   │   ├── check.go        #    Username availability check (Proton API)
-│   │   ├── fill.go         #    Interactive clipboard form filler
-│   │   └── init.go         #    YAML config template generator
-│   ├── signin/             # 🚧 Authentication (placeholder)
-│   │   └── signin.go
-│   └── mail/               # 🚧 Email management (placeholder)
+│   ├── signup/                   # ✅ Account creation helper
+│   │   ├── signup.go             #    Subcommand router
+│   │   ├── check.go              #    Username availability check (batch, --json)
+│   │   ├── fill.go               #    Interactive clipboard form filler
+│   │   ├── init.go               #    YAML config template generator
+│   │   └── validate.go           #    Password strength validator
+│   ├── signin/                   # ✅ SRP sign-in + keychain-backed sessions
+│   │   ├── signin.go             #    SRP handshake + AuthHandler wiring
+│   │   └── status_test.go        #    --status / --logout coverage
+│   └── mail/                     # 🚧 Email management (placeholder)
 │       └── mail.go
+├── internal/
+│   ├── keychain/                 # ✅ OS keychain wrapper (go-keyring, JSON bundle)
+│   │   ├── keychain.go
+│   │   └── keychain_test.go
+│   └── log/                      # slog-based verbose/debug logger
+│       └── log.go
+├── docs/
+│   ├── AGENT.md                  # Contract for AI agents working on this repo
+│   └── FUTURE_DAEMON.md          # Design sketch for the future headless daemon
 ├── go.mod
 ├── go.sum
 └── .gitignore
@@ -223,10 +275,13 @@ proton/
 
 ### Phase 2 — Authentication
 - [x] SRP authentication using [`go-proton-api`](https://github.com/ProtonMail/go-proton-api) and [`go-srp`](https://github.com/ProtonMail/go-srp)
+- [x] Session persistence with OS keychain integration (macOS Keychain, Linux Secret Service, Windows Credential Manager)
+- [x] `proton signin` / `proton signin --status` / `proton signin --logout`
+- [x] `AuthHandler`-driven auto-refresh so rotated tokens are re-persisted
 - [ ] TOTP two-factor authentication support
-- [ ] Session persistence with OS keychain integration (macOS Keychain, Linux `secret-service`, Windows Credential Manager)
-- [ ] `proton signin` / `proton signin status` / `proton signin logout`
-- [ ] Encrypted local config (never store passwords in plaintext)
+- [ ] Two-password mailbox unlock (encrypted-key accounts)
+- [ ] Encrypted-file fallback for headless environments without a keyring
+- [ ] Optional `proton-agent` daemon for headless boxes (see `docs/FUTURE_DAEMON.md`)
 
 ### Phase 3 — Mail
 - [ ] Fetch inbox with message list (sender, subject, date, read/unread)
@@ -251,16 +306,17 @@ proton/
 Proton Mail uses **end-to-end encryption**. Reading and sending emails requires:
 1. **SRP Authentication** — Proton uses the [Secure Remote Password](https://en.wikipedia.org/wiki/Secure_Remote_Password_protocol) protocol. No plaintext password ever leaves the client.
 2. **OpenPGP Decryption** — Messages are encrypted with the user's public key. The private key is encrypted with the user's mailbox password and stored on Proton's servers. Decryption happens client-side.
-3. **Session Tokens** — After SRP auth, the API issues access/refresh tokens for subsequent requests.
+3. **Session Tokens** — After SRP auth, the API issues access/refresh tokens for subsequent requests. `proton-cli` stores those tokens in the OS keychain and re-persists them on every `AuthHandler` refresh event, so the CLI stays signed in across invocations without ever writing tokens to disk.
 
-### Key Dependencies (planned)
-| Library | Purpose |
-|---------|---------|
-| [`ProtonMail/go-proton-api`](https://github.com/ProtonMail/go-proton-api) | Official Proton API client (auth, messages, contacts) |
-| [`ProtonMail/go-srp`](https://github.com/ProtonMail/go-srp) | SRP authentication protocol |
-| [`ProtonMail/go-crypto`](https://github.com/ProtonMail/go-crypto) | OpenPGP encryption/decryption |
-| [`gopkg.in/yaml.v3`](https://github.com/go-yaml/yaml) | YAML config parsing |
-| [`zalando/go-keyring`](https://github.com/zalando/go-keyring) | Cross-platform OS keychain access |
+### Key Dependencies
+| Library | Status | Purpose |
+|---------|--------|---------|
+| [`ProtonMail/go-proton-api`](https://github.com/ProtonMail/go-proton-api) | ✅ in use | Proton API client (auth, messages, contacts) |
+| [`ProtonMail/go-srp`](https://github.com/ProtonMail/go-srp) | ✅ in use (via `go-proton-api`) | SRP authentication protocol |
+| [`zalando/go-keyring`](https://github.com/zalando/go-keyring) | ✅ in use | Cross-platform OS keychain access |
+| [`golang.org/x/term`](https://pkg.go.dev/golang.org/x/term) | ✅ in use | Hidden password input on TTY |
+| [`gopkg.in/yaml.v3`](https://github.com/go-yaml/yaml) | ✅ in use | YAML config parsing |
+| [`ProtonMail/go-crypto`](https://github.com/ProtonMail/go-crypto) | 🚧 planned | OpenPGP encryption/decryption (needed for `mail`) |
 
 ### Related Projects
 - [Proton Bridge](https://github.com/ProtonMail/proton-bridge) — Official IMAP/SMTP bridge (reference for API usage)
@@ -269,9 +325,23 @@ Proton Mail uses **end-to-end encryption**. Reading and sending emails requires:
 
 ## Security
 
-- **No credentials stored in plaintext.** The `account.yaml` is gitignored and only used for the signup helper flow.
-- **Planned:** Session tokens will be stored in the OS keychain, not in files.
-- **Planned:** All email decryption happens locally — private keys never leave the device.
+- **Passwords are never transmitted.** Sign-in uses SRP-6a; only a local
+  proof crosses the network.
+- **Password buffer is wiped after use** (`defer wipe(password)`) so the
+  plaintext does not linger in the `[]byte` handed to the SRP client.
+- **No credentials in plaintext files.** `account.yaml` is gitignored and
+  only holds the *username* + optional recovery hints for the signup
+  helper. The password field is only read at signup time and never
+  persisted by the CLI.
+- **Session tokens live in the OS keychain**, not on disk. One JSON
+  bundle per user under service `proton-cli`:
+  - macOS → Keychain Services
+  - Windows → Credential Manager (DPAPI)
+  - Linux/BSD → Secret Service via D-Bus (gnome-keyring / KWallet)
+- **`--status` never prints tokens.** Only the UID, scope, and save
+  time are shown; the access / refresh strings stay in the keychain.
+- **Planned:** all email decryption will happen locally — private keys
+  never leave the device.
 
 ## Contributing
 
