@@ -53,6 +53,35 @@ Commands:
   help      Show help message
 ```
 
+### Validate password strength
+
+`proton signup validate` reads the password from `account.yaml` and
+reports on it with the same shape as Proton's own signup analyser
+(score buckets `Vulnerable` / `Weak` / `Strong`, plus penalty reasons
+like `NoUppercase`, `ContainsCommonPassword`, etc.). Exit code is `0`
+when the password is `Strong`, otherwise `1`.
+
+```bash
+$ proton signup validate
+❌ Password strength: Vulnerable (8 chars)
+Issues:
+  • missing uppercase letter
+  • missing number
+  • missing symbol
+  • appears on a well-known common-passwords list
+
+$ proton signup validate --json
+{
+  "score": "Vulnerable",
+  "penalties": ["NoUppercase", "NoNumbers", "NoSymbols", "ContainsCommonPassword"],
+  "length": 8
+}
+```
+
+The interactive `signup fill` flow also runs this check before copying
+the password to the clipboard, and asks for confirmation when the
+score is `Vulnerable`.
+
 ### Check if a username is available
 
 Check one or many usernames in a single call. Requests run concurrently
@@ -173,7 +202,7 @@ proton/
 - [x] Cross-platform clipboard (macOS `pbcopy`, Windows `clip`, WSL `clip.exe`, Linux Wayland `wl-copy`, Linux X11 `xclip`/`xsel`)
 - [x] Batch username check (multiple names at once, `--json` output)
 - [ ] Username variation generator (`--generate` / `suggest` subcommand)
-- [ ] Password strength validator
+- [x] Password strength validator (Proton-shaped score + penalties, common-password blocklist)
 
 ### Phase 2 — Authentication
 - [ ] SRP authentication using [`go-proton-api`](https://github.com/ProtonMail/go-proton-api) and [`go-srp`](https://github.com/ProtonMail/go-srp)
