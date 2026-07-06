@@ -41,7 +41,9 @@ recovery:
 func TestLoadConfigFrom_ValidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
-	os.WriteFile(path, []byte(validYAML), 0644)
+	if err := os.WriteFile(path, []byte(validYAML), 0644); err != nil {
+		t.Fatalf("writing test fixture: %v", err)
+	}
 
 	cfg, err := loadConfigFrom(path)
 	if err != nil {
@@ -75,7 +77,9 @@ func TestLoadConfigFrom_MissingFile(t *testing.T) {
 func TestLoadConfigFrom_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.yaml")
-	os.WriteFile(path, []byte("{{not yaml: ["), 0644)
+	if err := os.WriteFile(path, []byte("{{not yaml: ["), 0644); err != nil {
+		t.Fatalf("writing test fixture: %v", err)
+	}
 
 	_, err := loadConfigFrom(path)
 	if err == nil {
@@ -86,7 +90,9 @@ func TestLoadConfigFrom_InvalidYAML(t *testing.T) {
 func TestLoadConfigFrom_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.yaml")
-	os.WriteFile(path, []byte(""), 0644)
+	if err := os.WriteFile(path, []byte(""), 0644); err != nil {
+		t.Fatalf("writing test fixture: %v", err)
+	}
 
 	cfg, err := loadConfigFrom(path)
 	if err != nil {
@@ -172,7 +178,9 @@ func TestConfig_GetField_EmptyValue(t *testing.T) {
 func TestFillWithClipboard_SingleField(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
-	os.WriteFile(path, []byte(validYAML), 0644)
+	if err := os.WriteFile(path, []byte(validYAML), 0644); err != nil {
+		t.Fatalf("writing test fixture: %v", err)
+	}
 
 	clip := &mockClipboard{}
 	err := FillWithClipboard("username", path, clip)
@@ -187,7 +195,9 @@ func TestFillWithClipboard_SingleField(t *testing.T) {
 func TestFillWithClipboard_Password(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
-	os.WriteFile(path, []byte(validYAML), 0644)
+	if err := os.WriteFile(path, []byte(validYAML), 0644); err != nil {
+		t.Fatalf("writing test fixture: %v", err)
+	}
 
 	clip := &mockClipboard{}
 	err := FillWithClipboard("password", path, clip)
@@ -202,7 +212,9 @@ func TestFillWithClipboard_Password(t *testing.T) {
 func TestFillWithClipboard_UnknownField(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
-	os.WriteFile(path, []byte(validYAML), 0644)
+	if err := os.WriteFile(path, []byte(validYAML), 0644); err != nil {
+		t.Fatalf("writing test fixture: %v", err)
+	}
 
 	clip := &mockClipboard{}
 	err := FillWithClipboard("bogus_field", path, clip)
@@ -214,7 +226,9 @@ func TestFillWithClipboard_UnknownField(t *testing.T) {
 func TestFillWithClipboard_EmptyField(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
-	os.WriteFile(path, []byte(minimalYAML), 0644)
+	if err := os.WriteFile(path, []byte(minimalYAML), 0644); err != nil {
+		t.Fatalf("writing test fixture: %v", err)
+	}
 
 	clip := &mockClipboard{}
 	err := FillWithClipboard("password", path, clip)
@@ -226,7 +240,9 @@ func TestFillWithClipboard_EmptyField(t *testing.T) {
 func TestFillWithClipboard_ClipboardError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
-	os.WriteFile(path, []byte(validYAML), 0644)
+	if err := os.WriteFile(path, []byte(validYAML), 0644); err != nil {
+		t.Fatalf("writing test fixture: %v", err)
+	}
 
 	clip := &mockClipboard{err: errors.New("clipboard broken")}
 	err := FillWithClipboard("username", path, clip)
@@ -246,7 +262,9 @@ func TestFillWithClipboard_MissingConfig(t *testing.T) {
 func TestFillWithClipboard_RecoveryEmail(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
-	os.WriteFile(path, []byte(validYAML), 0644)
+	if err := os.WriteFile(path, []byte(validYAML), 0644); err != nil {
+		t.Fatalf("writing test fixture: %v", err)
+	}
 
 	clip := &mockClipboard{}
 	err := FillWithClipboard("recovery_email", path, clip)
@@ -261,7 +279,9 @@ func TestFillWithClipboard_RecoveryEmail(t *testing.T) {
 func TestFillWithClipboard_RecoveryPhone(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
-	os.WriteFile(path, []byte(validYAML), 0644)
+	if err := os.WriteFile(path, []byte(validYAML), 0644); err != nil {
+		t.Fatalf("writing test fixture: %v", err)
+	}
 
 	clip := &mockClipboard{}
 	err := FillWithClipboard("recovery_phone", path, clip)

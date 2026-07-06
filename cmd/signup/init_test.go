@@ -47,7 +47,9 @@ func TestInitConfig_FileExistsNoOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
 
-	os.WriteFile(path, []byte("existing content"), 0644)
+	if err := os.WriteFile(path, []byte("existing content"), 0644); err != nil {
+		t.Fatalf("writing test fixture: %v", err)
+	}
 
 	err := InitConfig(path, false)
 	if err == nil {
@@ -67,7 +69,9 @@ func TestInitConfig_FileExistsOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "account.yaml")
 
-	os.WriteFile(path, []byte("old content"), 0644)
+	if err := os.WriteFile(path, []byte("old content"), 0644); err != nil {
+		t.Fatalf("writing test fixture: %v", err)
+	}
 
 	err := InitConfig(path, true)
 	if err != nil {

@@ -64,12 +64,16 @@ func CheckAvailabilityWithEndpoint(username string, client HTTPClient, endpoint 
 
 	resp, err := client.Do(req)
 	if err != nil {
-		if resp != nil {
-			resp.Body.Close()
-		}
+		// Per net/http.Client.Do: on error, resp is nil. Nothing to close.
 		return nil, fmt.Errorf("error contacting Proton API: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		// Body.Close on a fully-read response should never fail; log at
+		// debug level if it ever does so we notice in --verbose runs.
+		if cerr := resp.Body.Close(); cerr != nil {
+			log.Debug("closing response body", "error", cerr)
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

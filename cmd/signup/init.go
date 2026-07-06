@@ -57,7 +57,10 @@ func Init() error {
 	if _, err := os.Stat(path); err == nil {
 		fmt.Printf("⚠️  %s already exists. Overwrite? [y/N] ", path)
 		var answer string
-		fmt.Scanln(&answer)
+		// Scanln returning an error (e.g. immediate EOF) means the user
+		// didn't type anything; treat that as a decline, same as an empty
+		// answer would produce below.
+		_, _ = fmt.Scanln(&answer)
 		if answer != "y" && answer != "Y" {
 			fmt.Println("Aborted.")
 			log.Info("User aborted configuration file creation")

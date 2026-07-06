@@ -12,7 +12,8 @@ A command-line interface for Proton Mail — manage your account, emails, and mo
 - **Interactive form filler** — copies each field to your clipboard step-by-step while you fill the browser form
 
 ### 🚧 Coming Soon
-- **Authentication** — Sign in via SRP protocol, session management, 2FA support
+- **Authentication** — SRP login works (`proton signin`); 2FA, session
+  persistence, and keychain integration are next.
 - **Mail** — Fetch, read, reply, send, and search emails from the terminal
 - **Contacts** — Manage your encrypted address book
 
@@ -48,7 +49,7 @@ proton — Proton Mail CLI tool
 
 Commands:
   signup    Account creation helper
-  signin    Sign in to your Proton account (coming soon)
+  signin    Sign in to your Proton account (SRP)
   mail      Manage emails (coming soon)
   help      Show help message
 ```
@@ -173,6 +174,22 @@ $ proton signup fill username
 📋 username → copied to clipboard
 ```
 
+### Sign in (SRP)
+
+```bash
+$ proton signin
+Proton username or email: luciano
+Password: (hidden)
+✅ SRP handshake succeeded
+   User ID:      xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+   Scope:        self mail ...
+```
+
+The password is used only to compute a local SRP proof; the plaintext
+never leaves your machine. This step verifies credentials and then
+drops the session tokens — 2FA prompts, keychain persistence, and
+long-lived sessions are the next tasks in Phase 2.
+
 ## Project Structure
 
 ```
@@ -205,7 +222,7 @@ proton/
 - [x] Password strength validator (Proton-shaped score + penalties, common-password blocklist)
 
 ### Phase 2 — Authentication
-- [ ] SRP authentication using [`go-proton-api`](https://github.com/ProtonMail/go-proton-api) and [`go-srp`](https://github.com/ProtonMail/go-srp)
+- [x] SRP authentication using [`go-proton-api`](https://github.com/ProtonMail/go-proton-api) and [`go-srp`](https://github.com/ProtonMail/go-srp)
 - [ ] TOTP two-factor authentication support
 - [ ] Session persistence with OS keychain integration (macOS Keychain, Linux `secret-service`, Windows Credential Manager)
 - [ ] `proton signin` / `proton signin status` / `proton signin logout`
