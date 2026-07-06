@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,11 +12,30 @@ import (
 	"strings"
 	"time"
 
+	"proton/internal/keychain"
 	"proton/internal/log"
 
 	proton "github.com/ProtonMail/go-proton-api"
 	"golang.org/x/term"
+	"gopkg.in/yaml.v3"
 )
+
+// usernameFromAccountYAML reads the same account.yaml layout the signup
+// helper writes. Only the Username field is needed here — anything else in
+// that file is out of scope for signin.
+func usernameFromAccountYAML(path string) (string, error) {
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var cfg struct {
+		Username string `yaml:"username"`
+	}
+	if err := yaml.Unmarshal(blob, &cfg); err != nil {
+		return "", fmt.Errorf("parse %s: %w", path, err)
+	}
+	return strings.TrimSpace(cfg.Username), nil
+}
 
 // appVersion is the value sent in the x-pm-appversion header that Proton
 // requires on every request. The stable form is <product>@<semver>; picking a
@@ -59,6 +79,26 @@ type SigninOptions struct {
 	// the bundled in-memory server (self-signed TLS). Production callers
 	// leave this nil.
 	Transport http.RoundTripper
+	// Persister is the keychain seam. Nil means the real OS keychain via
+	// the internal/keychain package. Tests inject a fake so the CI
+	// keyring is not touched.
+	Persister SessionPersister
+}
+
+// SessionPersister is the narrow interface signin needs from the keychain
+// layer: save the current session and forget it on demand. Only these two
+// verbs are used at sign-in time; --status / --logout live in Run and can
+// call keychain.Load / keychain.Delete directly.
+type SessionPersister interface {
+	Save(username string, s keychain.Session) error
+}
+
+// realKeychain is the production SessionPersister — thin wrapper delegating
+// to the internal/keychain package.
+type realKeychain struct{}
+
+func (realKeychain) Save(username string, s keychain.Session) error {
+	return keychain.Save(username, s)
 }
 
 // PromptReader is the injectable input surface for SignIn, so tests can feed
@@ -141,12 +181,54 @@ func signInWith(opts SigninOptions, p PromptReader, out io.Writer) (*SigninResul
 		TwoPasswordMod: auth.PasswordMode == proton.TwoPasswordMode,
 	}
 
+	// Persist the fresh session so subsequent CLI invocations reuse it
+	// instead of re-prompting for the password. If the account has 2FA or
+	// two-password mode we still save — the tokens are already valid for
+	// unscoped calls, and the follow-up 2FA step will overwrite this
+	// bundle on success.
+	persister := opts.Persister
+	if persister == nil {
+		persister = realKeychain{}
+	}
+	session := keychain.Session{
+		UID:          auth.UID,
+		AccessToken:  auth.AccessToken,
+		RefreshToken: auth.RefreshToken,
+		Scope:        auth.Scope,
+	}
+	if err := persister.Save(username, session); err != nil {
+		// Persistence failure is not a hard sign-in failure — the user
+		// has a valid session in this process. Warn and continue so
+		// they at least see the success message and can act on the
+		// warning (fix keychain, re-run signin).
+		log.Warn("Could not persist session to keychain", "err", err)
+		fmt.Fprintf(out, "⚠️  Sign-in succeeded but session could not be saved: %v\n", err)
+	} else {
+		log.Info("Session persisted to keychain", "user", username)
+	}
+
+	// Refresh events must also persist, otherwise the RefreshToken saved
+	// above becomes stale and the next invocation gets a 401 loop.
+	// go-proton-api rotates tokens on /auth/v4/refresh and fires this
+	// handler with the new pair.
+	client.AddAuthHandler(func(refreshed proton.Auth) {
+		refreshedSession := keychain.Session{
+			UID:          refreshed.UID,
+			AccessToken:  refreshed.AccessToken,
+			RefreshToken: refreshed.RefreshToken,
+			Scope:        refreshed.Scope,
+		}
+		if err := persister.Save(username, refreshedSession); err != nil {
+			log.Warn("Could not persist refreshed session", "err", err)
+		}
+	})
+
 	printSummary(out, result)
 
-	// Step 1 explicitly stops after SRP — 2FA + keychain persistence are
-	// separate follow-up tasks. Revoking here would force the user to
-	// re-authenticate on the next step, so we just drop the client and
-	// let the tokens expire naturally.
+	// SRP + persistence done. 2FA + two-password unlock remain as
+	// follow-up work; see docs/AGENT.md for scope. We deliberately do
+	// NOT call client.AuthDelete here — that would revoke the session we
+	// just saved.
 	return result, nil
 }
 
@@ -225,28 +307,128 @@ func (p *ttyPrompt) ReadPassword(prompt string) ([]byte, error) {
 }
 
 // Run handles the signin subcommand.
+//
+//	proton signin               — prompt for creds, do SRP, save session
+//	proton signin --status      — show saved-session summary (never prints tokens)
+//	proton signin --logout      — wipe saved session for the account
+//	proton signin help          — usage
 func Run(args []string) {
+	fs := flag.NewFlagSet("signin", flag.ExitOnError)
+	var (
+		status   bool
+		logout   bool
+		username string
+	)
+	fs.BoolVar(&status, "status", false, "show saved-session summary (does not print tokens)")
+	fs.BoolVar(&logout, "logout", false, "delete saved session from the OS keychain")
+	fs.StringVar(&username, "user", "", "target Proton username (defaults to account.yaml)")
+	fs.Usage = printUsage
+
+	// Preserve the existing 'signin help' subcommand form so we don't
+	// break shell muscle memory.
 	if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
 		printUsage()
 		return
 	}
 
-	if _, err := SignIn(SigninOptions{}); err != nil {
+	if err := fs.Parse(args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		os.Exit(2)
 	}
+	if status && logout {
+		fmt.Fprintln(os.Stderr, "Error: --status and --logout are mutually exclusive")
+		os.Exit(2)
+	}
+
+	switch {
+	case status:
+		if err := runStatus(username, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case logout:
+		if err := runLogout(username, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	default:
+		if _, err := SignIn(SigninOptions{}); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+}
+
+// resolveUsername returns the username to operate on for --status / --logout.
+// Explicit --user wins; otherwise fall back to account.yaml so users don't
+// have to re-type their address every command.
+func resolveUsername(flagValue string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+	u, err := usernameFromAccountYAML("account.yaml")
+	if err != nil {
+		return "", fmt.Errorf("no --user given and could not read account.yaml: %w", err)
+	}
+	if u == "" {
+		return "", errors.New("no --user given and account.yaml has no username")
+	}
+	return u, nil
+}
+
+func runStatus(flagUser string, out io.Writer) error {
+	user, err := resolveUsername(flagUser)
+	if err != nil {
+		return err
+	}
+	s, err := keychain.Load(user)
+	if errors.Is(err, keychain.ErrNotFound) {
+		fmt.Fprintf(out, "No saved session for %s. Run `proton signin`.\n", user)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// Never print the tokens themselves — not even truncated. If a user
+	// really wants to debug them they can query the OS keychain directly.
+	fmt.Fprintf(out, "Saved session for %s\n", user)
+	fmt.Fprintf(out, "  UID:         %s\n", s.UID)
+	fmt.Fprintf(out, "  Scope:       %s\n", s.Scope)
+	fmt.Fprintf(out, "  Saved at:    %s\n", s.SavedAt.Format(time.RFC3339))
+	return nil
+}
+
+func runLogout(flagUser string, out io.Writer) error {
+	user, err := resolveUsername(flagUser)
+	if err != nil {
+		return err
+	}
+	if err := keychain.Delete(user); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Signed out %s.\n", user)
+	return nil
 }
 
 func printUsage() {
 	fmt.Println(`proton signin — Sign in to your Proton account (SRP)
 
 Usage:
-  proton signin        Prompt for username + password and run the SRP
-                       handshake against Proton's servers.
+  proton signin                Prompt for username + password and run the SRP
+                               handshake against Proton's servers. On success
+                               the session tokens are saved to the OS keychain.
+  proton signin --status       Show the saved session summary for the current
+                               account (UID + scope + save time). Tokens are
+                               never printed.
+  proton signin --logout       Delete the saved session from the OS keychain.
+  proton signin --user <name>  Override the account resolved from account.yaml,
+                               used together with --status / --logout.
 
 Notes:
   * The password is never sent to Proton; a zero-knowledge proof is
     computed locally and only the proof is transmitted.
-  * Two-factor authentication and session persistence are not yet
-    implemented — expect the tokens to be discarded at exit.`)
+  * Session tokens are stored in the OS keychain (macOS Keychain,
+    Windows Credential Manager, Linux Secret Service).
+  * Two-factor authentication and two-password mailbox unlock are not
+    yet implemented.`)
 }

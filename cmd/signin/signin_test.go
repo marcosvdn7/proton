@@ -3,12 +3,46 @@ package signin
 import (
 	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
+
+	"proton/internal/keychain"
 
 	proton "github.com/ProtonMail/go-proton-api"
 	"github.com/ProtonMail/go-proton-api/server"
 )
+
+// memPersister is an in-memory SessionPersister so tests never touch the
+// developer's OS keychain. Concurrency-safe because AuthHandler may fire
+// from a goroutine inside go-proton-api.
+type memPersister struct {
+	mu       sync.Mutex
+	sessions map[string]keychain.Session
+	saveErr  error // if non-nil, Save returns it (for failure-path tests)
+	saveCall int
+}
+
+func (m *memPersister) Save(username string, s keychain.Session) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.saveCall++
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+	if m.sessions == nil {
+		m.sessions = map[string]keychain.Session{}
+	}
+	m.sessions[username] = s
+	return nil
+}
+
+func (m *memPersister) get(username string) (keychain.Session, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[username]
+	return s, ok
+}
 
 // fakePrompt is a canned PromptReader for tests.
 type fakePrompt struct {
@@ -39,20 +73,22 @@ func discardOut(t *testing.T) io.Writer {
 // newTestServer boots the in-memory Proton fake and returns SigninOptions
 // pointing at it with self-signed TLS bypass. Callers can override fields as
 // needed.
-func newTestServer(t *testing.T) (*server.Server, SigninOptions) {
+func newTestServer(t *testing.T) (*server.Server, SigninOptions, *memPersister) {
 	t.Helper()
 	// Plain HTTP — the fake's self-signed TLS costs ~30s per handshake on
 	// some machines and buys us nothing in unit tests.
 	s := server.New(server.WithTLS(false))
 	t.Cleanup(s.Close)
+	p := &memPersister{}
 	return s, SigninOptions{
-		HostURL: s.GetHostURL(),
-		Timeout: 30 * time.Second,
-	}
+		HostURL:   s.GetHostURL(),
+		Timeout:   30 * time.Second,
+		Persister: p,
+	}, p
 }
 
 func TestSignIn_SuccessfulHandshake(t *testing.T) {
-	s, opts := newTestServer(t)
+	s, opts, persister := newTestServer(t)
 
 	if _, _, err := s.CreateUser("user", []byte("pass")); err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -78,10 +114,49 @@ func TestSignIn_SuccessfulHandshake(t *testing.T) {
 	if res.Requires2FA {
 		t.Errorf("plain account should not require 2FA")
 	}
+
+	// Persistence contract: exactly one Save on the happy path, and the
+	// bundle must match what the API returned.
+	if persister.saveCall != 1 {
+		t.Errorf("expected exactly one Save call, got %d", persister.saveCall)
+	}
+	saved, ok := persister.get("user")
+	if !ok {
+		t.Fatal("expected session to be persisted for user")
+	}
+	if saved.UID != res.UID || saved.AccessToken != res.AccessToken || saved.RefreshToken != res.RefreshToken {
+		t.Errorf("persisted session mismatch: got %+v want UID=%s access=%s refresh=%s",
+			saved, res.UID, res.AccessToken, res.RefreshToken)
+	}
+}
+
+func TestSignIn_PersisterFailureDoesNotAbortSignIn(t *testing.T) {
+	s, opts, _ := newTestServer(t)
+	opts.Persister = &memPersister{saveErr: errors.New("boom")}
+
+	if _, _, err := s.CreateUser("user", []byte("pass")); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	// A keychain that refuses to save is a warning-level event, not a
+	// failure — the SRP handshake already succeeded and the process has
+	// valid tokens in memory. Users on WSL / headless boxes hit this and
+	// still want the sign-in to "work" for the current shell.
+	res, err := signInWith(
+		opts,
+		&fakePrompt{username: "user", password: "pass"},
+		discardOut(t),
+	)
+	if err != nil {
+		t.Fatalf("signInWith should tolerate persister failure, got %v", err)
+	}
+	if res == nil || res.UID == "" {
+		t.Error("expected valid result even when persister fails")
+	}
 }
 
 func TestSignIn_WrongPasswordFails(t *testing.T) {
-	s, opts := newTestServer(t)
+	s, opts, _ := newTestServer(t)
 
 	if _, _, err := s.CreateUser("user", []byte("correct-pass")); err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -98,7 +173,7 @@ func TestSignIn_WrongPasswordFails(t *testing.T) {
 }
 
 func TestSignIn_UnknownUsernameFails(t *testing.T) {
-	_, opts := newTestServer(t)
+	_, opts, _ := newTestServer(t)
 
 	_, err := signInWith(
 		opts,
